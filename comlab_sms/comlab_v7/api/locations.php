@@ -188,10 +188,11 @@ try {
 }
 
 function auditLog(PDO $db, ?int $uid, string $action, ?string $tt, ?int $tid, string $desc, ?string $ip = null, ?string $ua = null): void {
+    $auditTable = comlabAuditLogTable();
     try {
         $db->prepare(
-            'INSERT INTO audit_logs(user_id, action_type, target_type, target_id, description, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
+            "INSERT INTO {$auditTable}(user_id, action_type, target_type, target_id, description, ip_address, user_agent)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
         )->execute([$uid, $action, $tt, $tid, $desc, $ip, $ua]);
     } catch (PDOException $e) {
         error_log('[AuditLog] ' . $e->getMessage());

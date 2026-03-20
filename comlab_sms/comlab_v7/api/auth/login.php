@@ -8,9 +8,11 @@ require_once __DIR__ . '/../../includes/require_auth.php';
 header('Content-Type: application/json');
 securityHeaders(true);
 initSession();
+$base = getBasePath();
+$auditTable = comlabAuditLogTable();
 
 if (!empty($_SESSION['user_id'])) {
-    echo json_encode(['success' => true, 'redirect' => '/comlab/dashboard.php']);
+    echo json_encode(['success' => true, 'redirect' => $base . 'dashboard.php']);
     exit;
 }
 
@@ -70,8 +72,8 @@ try {
         $uid = $user['user_id'] ?? null;
         try {
             $db->prepare(
-                'INSERT INTO audit_logs (user_id, action_type, description, ip_address, user_agent)
-                 VALUES (?, ?, ?, ?, ?)'
+                "INSERT INTO {$auditTable} (user_id, action_type, description, ip_address, user_agent)
+                 VALUES (?, ?, ?, ?, ?)"
             )->execute([$uid, 'Login Failed', "Failed login attempt for username: $username", $ip, $ua]);
         } catch (Exception $e) {
             // non-fatal
@@ -110,15 +112,15 @@ try {
     unset($_SESSION[$rateBucket]);
 
     $db->prepare(
-        'INSERT INTO audit_logs (user_id, action_type, description, ip_address, user_agent)
-         VALUES (?, ?, ?, ?, ?)'
+        "INSERT INTO {$auditTable} (user_id, action_type, description, ip_address, user_agent)
+         VALUES (?, ?, ?, ?, ?)"
     )->execute([$user['user_id'], 'Login', "User '{$user['username']}' logged in successfully.", $ip, $ua]);
 
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 
     echo json_encode([
         'success'  => true,
-        'redirect' => '/comlab/dashboard.php',
+        'redirect' => $base . 'dashboard.php',
         'user'     => [
             'name' => $user['first_name'] . ' ' . $user['last_name'],
             'role' => $user['role'],

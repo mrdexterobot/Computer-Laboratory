@@ -25,10 +25,11 @@ define('MODULES', [
     'users'      => ['label' => 'User Management',      'icon' => 'fas fa-users',            'file' => 'users'],
     'devices'    => ['label' => 'Devices',              'icon' => 'fas fa-desktop',          'file' => 'devices'],
     'locations'  => ['label' => 'Lab Locations',        'icon' => 'fas fa-map-marker-alt',   'file' => 'locations'],
-    'scheduling' => ['label' => 'Faculty Schedules',    'icon' => 'fas fa-calendar-check',   'file' => 'scheduling'],
+    'scheduling' => ['label' => 'HR Faculty Schedules', 'icon' => 'fas fa-calendar-check',   'file' => 'scheduling'],
     'attendance' => ['label' => 'Attendance',           'icon' => 'fas fa-user-clock',       'file' => 'attendance'],
     'requests'   => ['label' => 'Requests',             'icon' => 'fas fa-clipboard-list',   'file' => 'requests'],
     'inventory'  => ['label' => 'Inventory',            'icon' => 'fas fa-boxes',            'file' => 'inventory'],
+    'integration'=> ['label' => 'Integration Hub',      'icon' => 'fas fa-share-nodes',      'file' => 'integration'],
     'logs'       => ['label' => 'Audit Logs',           'icon' => 'fas fa-history',          'file' => 'logs'],
 ]);
 
@@ -39,6 +40,7 @@ define('NAV_GROUPS', [
     'Main'       => ['dashboard'],
     'Management' => ['users', 'devices', 'locations'],
     'Operations' => ['scheduling', 'attendance', 'requests'],
+    'Integration' => ['integration'],
     'Reports'    => ['inventory', 'logs'],
 ]);
 
@@ -51,7 +53,7 @@ define('NAV_GROUPS', [
 define('ROLE_PERMISSIONS', [
     ROLE_ADMIN => [
         'dashboard', 'users', 'devices', 'locations',
-        'scheduling', 'attendance', 'requests', 'inventory', 'logs',
+        'scheduling', 'attendance', 'requests', 'inventory', 'integration', 'logs',
     ],
     ROLE_FACULTY => [
         'dashboard', 'scheduling', 'attendance', 'requests',

@@ -4,8 +4,8 @@
 // URL: /comlab/setup.php?key=comlab_setup_2025
 //
 // Seeds: 1 Admin + 3 Faculty, 3 labs, 15 devices,
-//        4 recurring schedules, ~3 weeks attendance,
-//        3 sample requests.
+//        4 recurring schedules, lab usage + equipment logs,
+//        ~3 weeks attendance, 3 sample requests.
 //
 // Delete this file after confirming login works!
 // ============================================
@@ -65,6 +65,178 @@ function hd(string $m):   void { global $log; $log[] = "\n<strong class='h'>→ 
 
 try {
     $db = getDB();
+
+    hd('Seeding department integration directory...');
+
+    $departments = [
+        ['REGISTRAR', 'Registrar', 'Student enrollment and academic records hub.'],
+        ['CASHIER', 'Cashier', 'Payments and financial clearing.'],
+        ['CLINIC', 'Clinic', 'Medical and health services office.'],
+        ['GUIDANCE', 'Guidance Office', 'Counseling and student support.'],
+        ['PREFECT', 'Prefect Office', 'Discipline and student conduct.'],
+        ['COMLAB', 'Computer Laboratory', 'Computer laboratory operations.'],
+        ['CRAD', 'CRAD Management', 'Student activities, laboratory programs, and co-curricular coordination.'],
+        ['HR', 'HR Department', 'Human resources and staffing.'],
+        ['PMED', 'PMED Department', 'Monitoring, evaluation, and development.'],
+        ['ADMIN', 'School Administration', 'School-wide administration and approvals.'],
+    ];
+
+    $deptId = [];
+    foreach ($departments as [$code, $name, $desc]) {
+        $chk = $db->prepare('SELECT department_id FROM departments WHERE department_code = ?');
+        $chk->execute([$code]);
+        if ($existing = $chk->fetchColumn()) {
+            skip("Department '{$code}' already exists.");
+            $deptId[$code] = $existing;
+            continue;
+        }
+
+        $deptId[$code] = insertReturningId(
+            $db,
+            'INSERT INTO departments (department_code, department_name, description, is_active)
+             VALUES (?, ?, ?, 1)',
+            [$code, $name, $desc],
+            'department_id'
+        );
+        ok("Department route profile: {$code} - {$name}");
+    }
+
+    $recordTypes = [
+        ['student_enrollment_data', 'Student Enrollment Data', 'student', 'Enrollment details sent from Registrar to Cashier.'],
+        ['payment_confirmation', 'Payment Confirmation', 'finance', 'Cashier confirmation sent to Registrar.'],
+        ['medical_clearance', 'Medical Clearance', 'health', 'Clinic clearance sent to Registrar.'],
+        ['counseling_reports', 'Counseling Reports', 'health', 'Counseling reports received by Registrar.'],
+        ['discipline_records', 'Discipline Records', 'discipline', 'Discipline information received by Registrar.'],
+        ['activity_participation_records', 'Activity Participation Records', 'student', 'Activity participation records from CRAD.'],
+        ['student_personal_information', 'Student Personal Information', 'student', 'Shared student profile information.'],
+        ['student_list', 'Student List', 'student', 'Student listing shared with recipient offices.'],
+        ['enrollment_statistics', 'Enrollment Statistics', 'student', 'Enrollment counts and trends.'],
+        ['payroll_data', 'Payroll Data', 'staff', 'Payroll-related data for Cashier.'],
+        ['financial_reports', 'Financial Reports', 'finance', 'Financial reports sent to PMED.'],
+        ['health_incident_reports', 'Health Incident Reports', 'health', 'Incident reports from Prefect to Clinic.'],
+        ['health_reports', 'Health Reports', 'health', 'Health reports from Clinic to Guidance.'],
+        ['medical_service_reports', 'Medical Service Reports', 'health', 'Clinic reporting to PMED.'],
+        ['student_academic_records', 'Student Academic Records', 'student', 'Academic records used by Guidance.'],
+        ['health_concerns', 'Health Concerns', 'health', 'Concerns forwarded from Guidance to Clinic.'],
+        ['discipline_reports', 'Discipline Reports', 'discipline', 'Reports shared between Guidance and Prefect.'],
+        ['incident_reports', 'Incident Reports', 'discipline', 'Incident reports shared by Prefect.'],
+        ['discipline_statistics', 'Discipline Statistics', 'discipline', 'Discipline statistics sent to PMED.'],
+        ['staff_list', 'Staff List', 'staff', 'Staff list received by the Computer Laboratory.'],
+        ['user_accounts', 'User Accounts', 'staff', 'User account data for laboratory access.'],
+        ['pmed_faculty_attendance', 'PMED Faculty Attendance', 'staff', 'Faculty attendance information from PMED.'],
+        ['faculty_schedule_assignments', 'Faculty Schedule Assignments', 'staff', 'HR-managed faculty schedule assignments sent to COMLAB.'],
+        ['student_account_information', 'Student Account Information', 'student', 'Registrar-managed student account identities and access details for COMLAB.'],
+        ['class_schedule_feed', 'Class Schedule Feed', 'student', 'Registrar schedule feed used by COMLAB for laboratory planning.'],
+        ['subject_lab_assignments', 'Subject and Lab Assignments', 'student', 'Registrar subject and lab assignment plan routed to COMLAB.'],
+        ['laboratory_usage_reports', 'Laboratory Usage Reports', 'lab', 'Usage reports sent to PMED.'],
+        ['laboratory_attendance_records', 'Laboratory Attendance Records', 'lab', 'Laboratory attendance records sent from COMLAB to Registrar.'],
+        ['equipment_log_reports', 'Equipment Log Reports', 'lab', 'Equipment maintenance and readiness logs sent from COMLAB to PMED.'],
+        ['laboratory_activity_reports', 'Laboratory Activity Reports', 'program', 'Laboratory activity summaries sent from COMLAB to CRAD Management.'],
+        ['lab_fee_assessment', 'Lab Fee Assessment', 'finance', 'Computer Laboratory billing assessment sent to Cashier.'],
+        ['facility_access_report', 'Facility Access Report', 'staff', 'Facility access and utilization report sent to HR.'],
+        ['student_recommendations', 'Student Recommendations', 'student', 'Recommendations coming from Guidance.'],
+        ['student_activity_records', 'Student Activity Records', 'student', 'Activity records sent back to Registrar.'],
+        ['program_reports', 'Program Reports', 'program', 'Program-level reports from CRAD.'],
+        ['program_activity_reports', 'Program Activity Reports', 'program', 'Program activity reports sent to PMED.'],
+        ['staff_evaluation_feedback', 'Staff Evaluation Feedback', 'staff', 'Feedback received by HR from PMED.'],
+        ['faculty_list', 'Faculty List', 'staff', 'Faculty list shared with Registrar.'],
+        ['employee_performance_records', 'Employee Performance Records', 'staff', 'Performance records reported by HR.'],
+        ['evaluation_reports', 'Evaluation Reports', 'program', 'School administration evaluation reports from PMED.'],
+    ];
+
+    $recordTypeId = [];
+    foreach ($recordTypes as [$code, $name, $domain, $desc]) {
+        $chk = $db->prepare('SELECT record_type_id FROM integration_record_types WHERE record_type_code = ?');
+        $chk->execute([$code]);
+        if ($existing = $chk->fetchColumn()) {
+            skip("Integration record type '{$code}' already exists.");
+            $recordTypeId[$code] = $existing;
+            continue;
+        }
+
+        $recordTypeId[$code] = insertReturningId(
+            $db,
+            'INSERT INTO integration_record_types (record_type_code, record_type_name, data_domain, description, is_active)
+             VALUES (?, ?, ?, ?, 1)',
+            [$code, $name, $domain, $desc],
+            'record_type_id'
+        );
+        ok("Integration record type: {$code}");
+    }
+
+    $routes = [
+        [1, 'REGISTRAR', 'CASHIER', 'student_enrollment_data', 'Registrar sends enrollment data to Cashier.'],
+        [2, 'CASHIER', 'REGISTRAR', 'payment_confirmation', 'Cashier sends payment confirmation to Registrar.'],
+        [3, 'REGISTRAR', 'CLINIC', 'student_personal_information', 'Registrar shares student personal information with Clinic.'],
+        [4, 'REGISTRAR', 'GUIDANCE', 'student_personal_information', 'Registrar shares student personal information with Guidance.'],
+        [5, 'REGISTRAR', 'PREFECT', 'student_personal_information', 'Registrar shares student personal information with Prefect.'],
+        [6, 'REGISTRAR', 'COMLAB', 'student_list', 'Registrar shares the student list with the Computer Laboratory.'],
+        [7, 'REGISTRAR', 'CRAD', 'student_list', 'Registrar shares the student list with CRAD.'],
+        [8, 'REGISTRAR', 'PMED', 'enrollment_statistics', 'Registrar sends enrollment statistics to PMED.'],
+        [9, 'CLINIC', 'REGISTRAR', 'medical_clearance', 'Clinic sends medical clearance to Registrar.'],
+        [10, 'GUIDANCE', 'REGISTRAR', 'counseling_reports', 'Guidance sends counseling reports to Registrar.'],
+        [11, 'PREFECT', 'REGISTRAR', 'discipline_records', 'Prefect sends discipline records to Registrar.'],
+        [12, 'PREFECT', 'CLINIC', 'health_incident_reports', 'Prefect sends health incident reports to Clinic.'],
+        [13, 'CLINIC', 'GUIDANCE', 'health_reports', 'Clinic sends health reports to Guidance.'],
+        [14, 'CLINIC', 'PMED', 'medical_service_reports', 'Clinic sends medical service reports to PMED.'],
+        [15, 'GUIDANCE', 'CLINIC', 'health_concerns', 'Guidance sends health concerns to Clinic.'],
+        [16, 'GUIDANCE', 'PREFECT', 'discipline_reports', 'Guidance sends discipline reports to Prefect.'],
+        [17, 'PREFECT', 'GUIDANCE', 'discipline_reports', 'Prefect sends discipline reports to Guidance.'],
+        [18, 'PREFECT', 'CLINIC', 'incident_reports', 'Prefect sends incident reports to Clinic.'],
+        [19, 'PREFECT', 'PMED', 'discipline_statistics', 'Prefect sends discipline statistics to PMED.'],
+        [20, 'HR', 'CASHIER', 'payroll_data', 'HR sends payroll data to Cashier.'],
+        [21, 'HR', 'REGISTRAR', 'faculty_list', 'HR sends the faculty list to Registrar.'],
+        [22, 'HR', 'PMED', 'employee_performance_records', 'HR sends employee performance records to PMED.'],
+        [23, 'PMED', 'COMLAB', 'pmed_faculty_attendance', 'PMED sends faculty attendance data to the Computer Laboratory.'],
+        [24, 'HR', 'COMLAB', 'faculty_schedule_assignments', 'HR sends faculty schedule assignments to the Computer Laboratory.'],
+        [25, 'COMLAB', 'PMED', 'laboratory_usage_reports', 'Computer Laboratory sends laboratory usage reports to PMED.'],
+        [26, 'COMLAB', 'CASHIER', 'lab_fee_assessment', 'Computer Laboratory sends lab fee assessments to Cashier.'],
+        [27, 'COMLAB', 'HR', 'facility_access_report', 'Computer Laboratory sends facility access reports to HR.'],
+        [28, 'CRAD', 'REGISTRAR', 'activity_participation_records', 'CRAD sends activity participation records to Registrar.'],
+        [29, 'CRAD', 'REGISTRAR', 'student_activity_records', 'CRAD sends student activity records to Registrar.'],
+        [30, 'CRAD', 'PMED', 'program_reports', 'CRAD sends program reports to PMED.'],
+        [31, 'CRAD', 'PMED', 'program_activity_reports', 'CRAD sends program activity reports to PMED.'],
+        [32, 'GUIDANCE', 'CRAD', 'student_recommendations', 'Guidance sends student recommendations to CRAD.'],
+        [33, 'CASHIER', 'PMED', 'financial_reports', 'Cashier sends financial reports to PMED.'],
+        [34, 'PMED', 'ADMIN', 'evaluation_reports', 'PMED sends evaluation reports to School Administration.'],
+        [35, 'PMED', 'HR', 'staff_evaluation_feedback', 'PMED sends staff evaluation feedback to HR.'],
+        [36, 'HR', 'COMLAB', 'staff_list', 'HR sends the staff list to the Computer Laboratory.'],
+        [37, 'HR', 'COMLAB', 'user_accounts', 'HR sends user account data to the Computer Laboratory.'],
+        [38, 'REGISTRAR', 'COMLAB', 'student_account_information', 'Registrar sends student account information to the Computer Laboratory.'],
+        [39, 'REGISTRAR', 'COMLAB', 'class_schedule_feed', 'Registrar sends class schedules to the Computer Laboratory.'],
+        [40, 'REGISTRAR', 'COMLAB', 'subject_lab_assignments', 'Registrar sends subject and lab assignments to the Computer Laboratory.'],
+        [41, 'COMLAB', 'REGISTRAR', 'laboratory_attendance_records', 'Computer Laboratory sends laboratory attendance records to Registrar.'],
+        [42, 'COMLAB', 'PMED', 'equipment_log_reports', 'Computer Laboratory sends equipment maintenance logs to PMED.'],
+        [43, 'COMLAB', 'CRAD', 'laboratory_activity_reports', 'Computer Laboratory sends laboratory activity reports to CRAD Management.'],
+    ];
+
+    foreach ($routes as [$flowOrder, $senderCode, $receiverCode, $recordCode, $notes]) {
+        $senderId = $deptId[$senderCode] ?? null;
+        $receiverId = $deptId[$receiverCode] ?? null;
+        $typeId = $recordTypeId[$recordCode] ?? null;
+
+        if (!$senderId || !$receiverId || !$typeId) {
+            warn("Integration route {$senderCode} -> {$receiverCode} ({$recordCode}) skipped because a dependency is missing.");
+            continue;
+        }
+
+        $chk = $db->prepare(
+            'SELECT route_id
+             FROM integration_routes
+             WHERE sender_department_id = ? AND receiver_department_id = ? AND record_type_id = ?'
+        );
+        $chk->execute([$senderId, $receiverId, $typeId]);
+        if ($chk->fetchColumn()) {
+            skip("Integration route {$senderCode} -> {$receiverCode} ({$recordCode}) already exists.");
+            continue;
+        }
+
+        $db->prepare(
+            'INSERT INTO integration_routes (flow_order, sender_department_id, receiver_department_id, record_type_id, notes, is_active)
+             VALUES (?, ?, ?, ?, ?, 1)'
+        )->execute([$flowOrder, $senderId, $receiverId, $typeId, $notes]);
+        ok("Integration route: {$senderCode} -> {$receiverCode} ({$recordCode})");
+    }
 
     // ── 1. USERS ──────────────────────────────────────────────────────────
     hd('Creating users…');
@@ -210,9 +382,16 @@ try {
             'INSERT INTO faculty_schedules
              (faculty_id,assigned_by,location_id,class_name,day_of_week,
               start_time,end_time,duration_hours,semester_start,semester_end,
-              department,notes,is_active)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)',
-            $s,
+              department,notes,source_system,source_reference,synced_from_hr,is_active)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)',
+            array_merge(
+                $s,
+                [
+                    'HR',
+                    'setup-hr-sync-' . $s[0] . '-' . strtolower(preg_replace('/[^a-z0-9]+/', '-', $s[3])),
+                    1,
+                ]
+            ),
             'schedule_id'
         );
         $schedIds[] = $id;
@@ -221,6 +400,105 @@ try {
 
     // ── 5. ATTENDANCE HISTORY (past 3 weeks) ──────────────────────────────
     hd('Seeding ~3 weeks of attendance history…');
+
+    hd('Adding sample lab usage logs...');
+
+    $usageLogs = [
+        ['LAB-A', $santosId ?? null, 'CIS101 - Introduction to Computing', 'CIS101', date('Y-m-d', strtotime('-5 days')), '08:05:00', '09:55:00', 28, 'seed-usage-lab-a-001', 'Intro computing hands-on laboratory session.'],
+        ['LAB-B', $santosId ?? null, 'CS201 - Object-Oriented Programming', 'CS201', date('Y-m-d', strtotime('-4 days')), '10:02:00', '11:48:00', 24, 'seed-usage-lab-b-001', 'Object-oriented programming coding drills.'],
+        ['LAB-B', $reyesId ?? null, 'IT301 - Database Management Systems', 'IT301', date('Y-m-d', strtotime('-3 days')), '13:06:00', '14:52:00', 22, 'seed-usage-lab-b-002', 'Database practicals and SQL lab assessment.'],
+        ['LAB-C', $cruzId ?? null, 'IT101 - Computer Fundamentals', 'IT101', date('Y-m-d', strtotime('-2 days')), '08:03:00', '09:45:00', 18, 'seed-usage-lab-c-001', 'Computer fundamentals orientation and lab walk-through.'],
+    ];
+
+    $usageCount = 0;
+    foreach ($usageLogs as [$labCode, $facultyId, $className, $subjectCode, $usageDate, $startTime, $endTime, $participants, $sourceReference, $notes]) {
+        $locationId = $lid[$labCode] ?? null;
+        if (!$locationId || !$facultyId || !$adminId) {
+            warn("Lab usage '{$sourceReference}' skipped - missing lab, faculty, or admin.");
+            continue;
+        }
+
+        $chk = $db->prepare('SELECT usage_log_id FROM lab_usage_logs WHERE source_reference = ?');
+        $chk->execute([$sourceReference]);
+        if ($chk->fetchColumn()) {
+            skip("Lab usage '{$sourceReference}' already exists.");
+            continue;
+        }
+
+        $scheduleStmt = $db->prepare('SELECT schedule_id FROM faculty_schedules WHERE faculty_id = ? AND class_name = ? AND is_active = 1 LIMIT 1');
+        $scheduleStmt->execute([$facultyId, $className]);
+        $scheduleId = $scheduleStmt->fetchColumn() ?: null;
+
+        $db->prepare(
+            'INSERT INTO lab_usage_logs
+             (location_id, faculty_id, schedule_id, recorded_by, usage_date, session_start, session_end, participant_count, subject_code, source_system, source_reference, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )->execute([
+            $locationId,
+            $facultyId,
+            $scheduleId,
+            $adminId,
+            $usageDate,
+            $usageDate . ' ' . $startTime,
+            $usageDate . ' ' . $endTime,
+            $participants,
+            $subjectCode,
+            'COMLAB',
+            $sourceReference,
+            $notes,
+        ]);
+        $usageCount++;
+    }
+    ok("{$usageCount} lab usage log(s) seeded.");
+
+    hd('Adding sample equipment maintenance logs...');
+
+    $maintenanceLogs = [
+        ['PC-A-003', 'Repair', 'Random shutdown during classroom sessions.', 'Re-seated memory modules and scheduled PSU observation.', 'Under Repair', 'Under Repair', 1250.00, date('Y-m-d', strtotime('-10 days')) . ' 09:00:00', date('Y-m-d', strtotime('-10 days')) . ' 11:00:00'],
+        ['PC-A-005', 'Inspection', 'Chassis dent and unstable keyboard port.', 'Logged physical damage and isolated the workstation from classroom use.', 'Damaged', 'Damaged', 0.00, date('Y-m-d', strtotime('-7 days')) . ' 09:00:00', date('Y-m-d', strtotime('-7 days')) . ' 10:00:00'],
+        ['PRINT-A-001', 'Preventive Maintenance', 'Scheduled cleaning before heavy reporting cycle.', 'Cleaned rollers and recalibrated tray alignment.', 'Available', 'Available', 350.00, date('Y-m-d', strtotime('-4 days')) . ' 09:00:00', date('Y-m-d', strtotime('-4 days')) . ' 10:30:00'],
+    ];
+
+    $maintenanceCount = 0;
+    foreach ($maintenanceLogs as [$deviceCode, $maintenanceType, $issueDescription, $actionTaken, $statusBefore, $statusAfter, $cost, $startDateTime, $endDateTime]) {
+        $deviceStmt = $db->prepare('SELECT device_id FROM devices WHERE device_code = ? LIMIT 1');
+        $deviceStmt->execute([$deviceCode]);
+        $deviceId = $deviceStmt->fetchColumn() ?: null;
+        if (!$deviceId || !$adminId) {
+            warn("Equipment log for '{$deviceCode}' skipped - missing device or admin.");
+            continue;
+        }
+
+        $chk = $db->prepare(
+            'SELECT maintenance_id
+             FROM device_maintenance_logs
+             WHERE device_id = ? AND maintenance_type = ? AND start_datetime = ?'
+        );
+        $chk->execute([$deviceId, $maintenanceType, $startDateTime]);
+        if ($chk->fetchColumn()) {
+            skip("Equipment log '{$deviceCode}' / '{$maintenanceType}' already exists.");
+            continue;
+        }
+
+        $db->prepare(
+            'INSERT INTO device_maintenance_logs
+             (device_id, performed_by, maintenance_type, issue_description, action_taken, status_before, status_after, cost, start_datetime, end_datetime)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )->execute([
+            $deviceId,
+            $adminId,
+            $maintenanceType,
+            $issueDescription,
+            $actionTaken,
+            $statusBefore,
+            $statusAfter,
+            $cost,
+            $startDateTime,
+            $endDateTime,
+        ]);
+        $maintenanceCount++;
+    }
+    ok("{$maintenanceCount} equipment maintenance log(s) seeded.");
 
     $allScheds = $db->query(
         "SELECT schedule_id, faculty_id, day_of_week, start_time, semester_start, semester_end

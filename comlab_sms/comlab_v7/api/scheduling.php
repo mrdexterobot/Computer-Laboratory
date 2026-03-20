@@ -16,6 +16,7 @@ $ua   = substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 255);
 
 define('CHECKIN_BEFORE_MIN', 15);
 define('CHECKIN_AFTER_MIN', 30);
+define('HR_SCHEDULE_RECORD_TYPE', 'faculty_schedule_assignments');
 
 try {
     $db = getDB();
@@ -198,6 +199,15 @@ try {
             exit;
         }
 
+        if ($action === 'hr_status') {
+            $status = latestHrScheduleDocument($db);
+            echo json_encode([
+                'success' => true,
+                'hr_feed' => $status,
+            ]);
+            exit;
+        }
+
         $params = [];
         $userFilter = '';
         if ($role === ROLE_FACULTY) {
@@ -341,6 +351,160 @@ try {
             exit;
         }
 
+        if ($action === 'sync_hr') {
+            if ($role !== ROLE_ADMIN) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Admin only.']);
+                exit;
+            }
+
+            $document = latestHrScheduleDocument($db);
+            if ($document === null) {
+                echo json_encode(['success' => false, 'message' => 'No HR schedule feed was found for COMLAB.']);
+                exit;
+            }
+
+            $payload = $document['payload'];
+            $schedules = [];
+            if (is_array($payload) && isset($payload['schedules']) && is_array($payload['schedules'])) {
+                $schedules = $payload['schedules'];
+            }
+
+            if ($schedules === []) {
+                echo json_encode(['success' => false, 'message' => 'The latest HR schedule feed does not contain any schedules.']);
+                exit;
+            }
+
+            $created = 0;
+            $updated = 0;
+            $skipped = [];
+
+            foreach ($schedules as $index => $item) {
+                if (!is_array($item)) {
+                    $skipped[] = 'Row ' . ($index + 1) . ' is not a valid schedule object.';
+                    continue;
+                }
+
+                $facultyId = resolveFacultyIdFromHrPayload($db, $item);
+                $locationId = resolveLocationIdFromHrPayload($db, $item);
+                $className = trim((string) ($item['class_name'] ?? ''));
+                $days = trim((string) ($item['day_of_week'] ?? ''));
+                $start = trim((string) ($item['start_time'] ?? ''));
+                $end = trim((string) ($item['end_time'] ?? ''));
+                $semesterStart = trim((string) ($item['semester_start'] ?? ''));
+                $semesterEnd = trim((string) ($item['semester_end'] ?? ''));
+                $department = trim((string) ($item['department'] ?? ''));
+                $notes = trim((string) ($item['notes'] ?? ''));
+                $sourceReference = trim((string) ($item['source_reference'] ?? ($document['source_reference'] . ':' . ($index + 1))));
+
+                if (!$facultyId || !$locationId || $className === '' || $days === '' || $start === '' || $end === '' || $semesterStart === '' || $semesterEnd === '' || $department === '') {
+                    $skipped[] = 'Row ' . ($index + 1) . ' is missing a faculty match, lab match, or a required schedule field.';
+                    continue;
+                }
+
+                if ($start >= $end || $semesterStart >= $semesterEnd) {
+                    $skipped[] = 'Row ' . ($index + 1) . ' has an invalid time or semester range.';
+                    continue;
+                }
+
+                [$sh, $sm] = array_map('intval', explode(':', substr($start, 0, 5)));
+                [$eh, $em] = array_map('intval', explode(':', substr($end, 0, 5)));
+                $duration = round((($eh * 60 + $em) - ($sh * 60 + $sm)) / 60, 2);
+
+                $existing = $db->prepare(
+                    'SELECT schedule_id
+                     FROM faculty_schedules
+                     WHERE faculty_id = ?
+                       AND class_name = ?
+                       AND semester_start = ?'
+                );
+                $existing->execute([$facultyId, $className, $semesterStart]);
+                $existingId = $existing->fetchColumn();
+
+                if ($existingId) {
+                    $db->prepare(
+                        'UPDATE faculty_schedules
+                         SET location_id = ?,
+                             day_of_week = ?,
+                             start_time = ?,
+                             end_time = ?,
+                             duration_hours = ?,
+                             semester_end = ?,
+                             department = ?,
+                             notes = ?,
+                             source_system = ?,
+                             source_reference = ?,
+                             synced_from_hr = 1,
+                             is_active = 1,
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE schedule_id = ?'
+                    )->execute([
+                        $locationId,
+                        $days,
+                        $start,
+                        $end,
+                        $duration,
+                        $semesterEnd,
+                        $department,
+                        $notes,
+                        'HR',
+                        $sourceReference,
+                        $existingId,
+                    ]);
+                    $updated++;
+                    continue;
+                }
+
+                insertReturningId(
+                    $db,
+                    'INSERT INTO faculty_schedules
+                     (faculty_id, assigned_by, location_id, class_name, day_of_week,
+                      start_time, end_time, duration_hours, semester_start, semester_end,
+                      department, notes, source_system, source_reference, synced_from_hr, is_active)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)',
+                    [
+                        $facultyId,
+                        $uid,
+                        $locationId,
+                        $className,
+                        $days,
+                        $start,
+                        $end,
+                        $duration,
+                        $semesterStart,
+                        $semesterEnd,
+                        $department,
+                        $notes,
+                        'HR',
+                        $sourceReference,
+                    ],
+                    'schedule_id'
+                );
+                $created++;
+            }
+
+            auditLog(
+                $db,
+                $uid,
+                'HR Schedule Sync',
+                'System',
+                null,
+                "HR schedule feed synced from document {$document['document_id']}. Created {$created}, updated {$updated}, skipped " . count($skipped) . '.',
+                $ip,
+                $ua
+            );
+
+            echo json_encode([
+                'success' => true,
+                'message' => "HR schedule sync completed. Created {$created}, updated {$updated}, skipped " . count($skipped) . '.',
+                'created' => $created,
+                'updated' => $updated,
+                'skipped' => $skipped,
+                'document' => $document,
+            ]);
+            exit;
+        }
+
         if ($action === 'cancel') {
             if ($role !== ROLE_ADMIN) {
                 http_response_code(403);
@@ -451,12 +615,104 @@ try {
 
 function auditLog(PDO $db, ?int $uid, string $action, ?string $tt, ?int $tid, string $desc,
                   ?string $ip = null, ?string $ua = null): void {
+    $auditTable = comlabAuditLogTable();
     try {
         $db->prepare(
-            'INSERT INTO audit_logs(user_id, action_type, target_type, target_id, description, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
+            "INSERT INTO {$auditTable}(user_id, action_type, target_type, target_id, description, ip_address, user_agent)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
         )->execute([$uid, $action, $tt, $tid, $desc, $ip, $ua]);
     } catch (PDOException $e) {
         error_log('[AuditLog] ' . $e->getMessage());
     }
+}
+
+function latestHrScheduleDocument(PDO $db): ?array {
+    $stmt = $db->prepare(
+        "SELECT d.document_id, d.source_reference, d.sent_at, d.received_at, d.acknowledged_at, d.created_at, d.payload
+         FROM integration_documents d
+         JOIN integration_record_types rt ON rt.record_type_id = d.record_type_id
+         JOIN departments sd ON sd.department_id = d.sender_department_id
+         JOIN departments rd ON rd.department_id = d.receiver_department_id
+         WHERE sd.department_code = 'HR'
+           AND rd.department_code = 'COMLAB'
+           AND rt.record_type_code = ?
+         ORDER BY COALESCE(d.sent_at, d.created_at) DESC
+         LIMIT 1"
+    );
+    $stmt->execute([HR_SCHEDULE_RECORD_TYPE]);
+    $row = $stmt->fetch();
+    if (!$row) {
+        return null;
+    }
+
+    $payload = json_decode((string) $row['payload'], true);
+    return [
+        'document_id' => (string) $row['document_id'],
+        'source_reference' => (string) ($row['source_reference'] ?? ''),
+        'sent_at' => $row['sent_at'],
+        'received_at' => $row['received_at'],
+        'acknowledged_at' => $row['acknowledged_at'],
+        'created_at' => $row['created_at'],
+        'payload' => is_array($payload) ? $payload : [],
+    ];
+}
+
+function resolveFacultyIdFromHrPayload(PDO $db, array $item): ?int {
+    $username = trim((string) ($item['faculty_username'] ?? ''));
+    $email = trim((string) ($item['faculty_email'] ?? ''));
+    $employeeId = trim((string) ($item['hr_employee_id'] ?? ''));
+
+    if ($employeeId !== '') {
+        $stmt = $db->prepare("SELECT user_id FROM users WHERE hr_employee_id = ? AND role = 'Faculty' LIMIT 1");
+        $stmt->execute([$employeeId]);
+        $id = $stmt->fetchColumn();
+        if ($id) {
+            return (int) $id;
+        }
+    }
+
+    if ($username !== '') {
+        $stmt = $db->prepare("SELECT user_id FROM users WHERE username = ? AND role = 'Faculty' LIMIT 1");
+        $stmt->execute([$username]);
+        $id = $stmt->fetchColumn();
+        if ($id) {
+            return (int) $id;
+        }
+    }
+
+    if ($email !== '') {
+        $stmt = $db->prepare("SELECT user_id FROM users WHERE email = ? AND role = 'Faculty' LIMIT 1");
+        $stmt->execute([$email]);
+        $id = $stmt->fetchColumn();
+        if ($id) {
+            return (int) $id;
+        }
+    }
+
+    return null;
+}
+
+function resolveLocationIdFromHrPayload(PDO $db, array $item): ?int {
+    $labCode = trim((string) ($item['lab_code'] ?? ''));
+    $labName = trim((string) ($item['lab_name'] ?? ''));
+
+    if ($labCode !== '') {
+        $stmt = $db->prepare('SELECT location_id FROM locations WHERE lab_code = ? AND is_active = 1 LIMIT 1');
+        $stmt->execute([$labCode]);
+        $id = $stmt->fetchColumn();
+        if ($id) {
+            return (int) $id;
+        }
+    }
+
+    if ($labName !== '') {
+        $stmt = $db->prepare('SELECT location_id FROM locations WHERE lab_name = ? AND is_active = 1 LIMIT 1');
+        $stmt->execute([$labName]);
+        $id = $stmt->fetchColumn();
+        if ($id) {
+            return (int) $id;
+        }
+    }
+
+    return null;
 }

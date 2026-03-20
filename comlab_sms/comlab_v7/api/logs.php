@@ -12,6 +12,7 @@ $user = requireAuth('logs');
 try {
     $db   = getDB();
     $date = $_GET['date'] ?? '';
+    $auditTable = comlabAuditLogTable();
 
     if (!empty($_GET['export'])) {
         header('Content-Type: text/csv');
@@ -22,7 +23,7 @@ try {
             "SELECT al.log_id, al.created_at, al.action_type,
                     CONCAT(u.first_name, ' ', u.last_name),
                     u.role, al.target_type, al.target_id, al.description, al.ip_address
-             FROM audit_logs al
+             FROM {$auditTable} al
              LEFT JOIN users u ON al.user_id = u.user_id
              ORDER BY al.created_at DESC
              LIMIT 5000"
@@ -40,7 +41,7 @@ try {
         "SELECT al.log_id, al.action_type, al.target_type, al.target_id,
                 al.description, al.ip_address, al.created_at,
                 CONCAT(u.first_name, ' ', u.last_name) AS performed_by, u.role
-         FROM audit_logs al
+         FROM {$auditTable} al
          LEFT JOIN users u ON al.user_id = u.user_id
          $where
          ORDER BY al.created_at DESC

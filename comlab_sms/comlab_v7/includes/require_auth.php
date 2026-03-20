@@ -134,8 +134,57 @@ function destroySession(): void {
  * Works whether pages are in root or subfolders.
  */
 function getBasePath(): string {
-    // All pages are in the project root (comlab/)
-    return '/comlab/';
+    static $basePath = null;
+    if ($basePath !== null) {
+        return $basePath;
+    }
+
+    $normalizePath = static function (string $path): string {
+        if ($path === '') {
+            return '';
+        }
+
+        $real = realpath($path);
+        if ($real !== false) {
+            $path = $real;
+        }
+
+        return rtrim(str_replace('\\', '/', $path), '/');
+    };
+
+    $projectRoot  = $normalizePath(dirname(__DIR__));
+    $documentRoot = $normalizePath((string) ($_SERVER['DOCUMENT_ROOT'] ?? ''));
+
+    if ($documentRoot !== '' && stripos($projectRoot . '/', $documentRoot . '/') === 0) {
+        $relative = trim(substr($projectRoot, strlen($documentRoot)), '/');
+        if ($relative === '') {
+            return $basePath = '/';
+        }
+
+        $segments = array_map('rawurlencode', array_filter(explode('/', $relative), 'strlen'));
+        return $basePath = '/' . implode('/', $segments) . '/';
+    }
+
+    $scriptDirFs  = $normalizePath(dirname((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')));
+    $scriptDirUrl = trim(str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? ''))), '/.');
+
+    if (
+        $scriptDirFs !== '' &&
+        $scriptDirUrl !== '' &&
+        stripos($scriptDirFs . '/', $projectRoot . '/') === 0
+    ) {
+        $relativeDir = trim(substr($scriptDirFs, strlen($projectRoot)), '/');
+        $urlSegments = array_values(array_filter(explode('/', $scriptDirUrl), 'strlen'));
+        $levelsUp    = $relativeDir === '' ? 0 : count(array_filter(explode('/', $relativeDir), 'strlen'));
+
+        if ($levelsUp > 0) {
+            $urlSegments = array_slice($urlSegments, 0, max(0, count($urlSegments) - $levelsUp));
+        }
+
+        return $basePath = empty($urlSegments) ? '/' : '/' . implode('/', $urlSegments) . '/';
+    }
+
+    return $basePath = '/';
 }
 
 /**

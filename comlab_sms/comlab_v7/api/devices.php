@@ -209,10 +209,11 @@ try {
 
 function auditLog(PDO $db, ?int $uid, string $action, ?string $targetType, ?int $targetId, string $desc,
                   ?string $oldVal = null, ?string $newVal = null, ?string $ip = null, ?string $ua = null): void {
+    $auditTable = comlabAuditLogTable();
     try {
         $db->prepare(
-            'INSERT INTO audit_logs(user_id, action_type, target_type, target_id, description, old_value, new_value, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            "INSERT INTO {$auditTable}(user_id, action_type, target_type, target_id, description, old_value, new_value, ip_address, user_agent)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )->execute([$uid, $action, $targetType, $targetId, $desc, $oldVal, $newVal, $ip, $ua]);
     } catch (PDOException $e) {
         error_log('[COMLAB AuditLog] ' . $e->getMessage());
