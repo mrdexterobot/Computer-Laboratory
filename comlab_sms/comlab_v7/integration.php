@@ -764,7 +764,8 @@ if (dispatchReportForm) {
     const notes = document.getElementById('reportNotes').value.trim();
 
     try {
-      await postJson(API.report.replace('?department=PMED', ''), {
+      const reportApiUrl = API.report.split('?')[0];
+      await postJson(reportApiUrl, {
         action: 'dispatch_report',
         target_key: 'PMED',
         report_type: pmedReport?.report?.report_type_code || 'laboratory_usage_reports',

@@ -319,7 +319,12 @@ function integrationHydrateDocument(PDO $db, string $documentId): ?array {
 }
 
 function integrationAudit(PDO $db, ?int $userId, string $actionType, string $description, ?string $targetType = 'System', mixed $targetId = null): void {
-    $targetId = is_numeric($targetId) ? (int) $targetId : null;
+    $numericId = is_numeric($targetId) ? (int) $targetId : null;
+    $finalDescription = $description;
+    if ($targetId !== null && !is_numeric($targetId)) {
+        $finalDescription .= ' (Ref: ' . $targetId . ')';
+    }
+
     try {
         $db->prepare(
             'INSERT INTO audit_logs (user_id, action_type, target_type, target_id, description, ip_address, user_agent)
@@ -328,13 +333,13 @@ function integrationAudit(PDO $db, ?int $userId, string $actionType, string $des
             $userId,
             $actionType,
             $targetType,
-            $targetId,
-            $description,
+            $numericId,
+            $finalDescription,
             $_SERVER['REMOTE_ADDR'] ?? null,
             substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 255),
         ]);
     } catch (Throwable $e) {
-        error_log('[COMLAB Integration Audit] ' . $e->getMessage());
+        error_log(\'[COMLAB Integration Audit] \' . $e->getMessage());
     }
 }
 

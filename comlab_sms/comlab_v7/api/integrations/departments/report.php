@@ -216,7 +216,7 @@ function integrationDispatchReport(PDO $db, array $input, array $access): array 
         $db,
         $access['user']['user_id'] ?? null,
         'Integration Report Dispatch',
-        sprintf('COMLAB dispatched %s to %s.', $reportTypeCode, $targetCode),
+        sprintf('COMLAB dispatched %s to %s.', $selectedRoute['record_type_name'], $targetCode),
         'System',
         $documentId
     );
