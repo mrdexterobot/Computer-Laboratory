@@ -12,7 +12,7 @@ function integrationBootstrap(): void {
     initSession();
 }
 
-function integrationJson(array $payload, int $status = 200): never {
+function integrationJson(array $payload, int $status = 200) {
     http_response_code($status);
     echo json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
@@ -29,7 +29,7 @@ function integrationInput(): array {
     }
 
     $contentType = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? ''));
-    if (str_contains($contentType, 'application/json')) {
+    if (strpos($contentType, 'application/json') !== false) {
         $raw = file_get_contents('php://input');
         if ($raw === false || trim($raw) === '') {
             return [];
@@ -85,7 +85,7 @@ function integrationNormalizeStatus(?string $value): string {
     return $map[$value] ?? '';
 }
 
-function integrationDecodeJsonValue(mixed $value): mixed {
+function integrationDecodeJsonValue($value) {
     if (!is_string($value)) {
         return $value;
     }
@@ -99,7 +99,7 @@ function integrationDecodeJsonValue(mixed $value): mixed {
     return json_last_error() === JSON_ERROR_NONE ? $decoded : $value;
 }
 
-function integrationParsePayloadValue(mixed $value): array {
+function integrationParsePayloadValue($value): array {
     if ($value === null || $value === '') {
         return [];
     }
@@ -318,7 +318,7 @@ function integrationHydrateDocument(PDO $db, string $documentId): ?array {
     ];
 }
 
-function integrationAudit(PDO $db, ?int $userId, string $actionType, string $description, ?string $targetType = 'System', mixed $targetId = null): void {
+function integrationAudit(PDO $db, ?int $userId, string $actionType, string $description, ?string $targetType = 'System', $targetId = null): void {
     $numericId = is_numeric($targetId) ? (int) $targetId : null;
     $finalDescription = $description;
     if ($targetId !== null && !is_numeric($targetId)) {
@@ -339,7 +339,7 @@ function integrationAudit(PDO $db, ?int $userId, string $actionType, string $des
             substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 255),
         ]);
     } catch (Throwable $e) {
-        error_log(\'[COMLAB Integration Audit] \' . $e->getMessage());
+        error_log('[COMLAB Integration Audit] ' . $e->getMessage());
     }
 }
 
