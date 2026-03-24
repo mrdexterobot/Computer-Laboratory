@@ -343,85 +343,157 @@ function integrationAudit(PDO $db, ?int $userId, string $actionType, string $des
     }
 }
 
+function integrationTableExists(PDO $db, string $table): bool {
+    static $cache = [];
+    $schema = comlabDbSchema();
+    $key = strtolower($schema . '.' . $table);
+    if (array_key_exists($key, $cache)) {
+        return $cache[$key];
+    }
+
+    $stmt = $db->prepare('SELECT to_regclass(?) AS regclass_name');
+    $stmt->execute([$schema . '.' . $table]);
+    $exists = $stmt->fetchColumn() !== null;
+    $cache[$key] = $exists;
+
+    return $exists;
+}
+
+function integrationSafeCount(PDO $db, string $table, string $whereSql = ''): int {
+    if (!integrationTableExists($db, $table)) {
+        return 0;
+    }
+
+    $sql = 'SELECT COUNT(*) FROM ' . $table;
+    if ($whereSql !== '') {
+        $sql .= ' WHERE ' . $whereSql;
+    }
+
+    $stmt = $db->query($sql);
+    return (int) ($stmt->fetchColumn() ?: 0);
+}
+
+function integrationSafeSum(PDO $db, string $table, string $field, string $whereSql = ''): int {
+    if (!integrationTableExists($db, $table)) {
+        return 0;
+    }
+
+    $sql = 'SELECT COALESCE(SUM(' . $field . '), 0) FROM ' . $table;
+    if ($whereSql !== '') {
+        $sql .= ' WHERE ' . $whereSql;
+    }
+
+    $stmt = $db->query($sql);
+    return (int) ($stmt->fetchColumn() ?: 0);
+}
+
 function integrationBuildUsageReport(PDO $db): array {
-    $stats = $db->query(
-        "SELECT
-            (SELECT COUNT(*) FROM locations WHERE is_active = 1) AS active_labs,
-            (SELECT COALESCE(SUM(capacity), 0) FROM locations WHERE is_active = 1) AS total_capacity,
-            (SELECT COUNT(*) FROM devices) AS total_devices,
-            (SELECT COUNT(*) FROM devices WHERE status = 'Available') AS devices_available,
-            (SELECT COUNT(*) FROM devices WHERE status = 'Under Repair') AS devices_under_repair,
-            (SELECT COUNT(*) FROM devices WHERE status = 'Damaged') AS devices_damaged,
-            (SELECT COUNT(*) FROM faculty_schedules WHERE is_active = 1) AS active_schedules,
-            (SELECT COUNT(*) FROM requests WHERE status = 'Pending') AS pending_requests,
-            (SELECT COUNT(*) FROM schedule_attendance WHERE attendance_date = CURRENT_DATE AND status = 'Present') AS present_today,
-            (SELECT COUNT(*) FROM schedule_attendance WHERE attendance_date = CURRENT_DATE AND status = 'Absent') AS absent_today,
-            (SELECT COUNT(*) FROM users WHERE role = 'Faculty' AND is_active = 1) AS active_faculty,
-            (SELECT COUNT(*) FROM lab_usage_logs WHERE usage_date = CURRENT_DATE) AS usage_sessions_today,
-            (SELECT COUNT(*) FROM lab_usage_logs WHERE usage_date >= CURRENT_DATE - 7) AS usage_sessions_7d,
-            (SELECT COALESCE(SUM(participant_count), 0) FROM lab_usage_logs WHERE usage_date >= CURRENT_DATE - 7) AS participants_7d,
-            (SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (COALESCE(session_end, session_start) - session_start))) / 3600.0, 0) FROM lab_usage_logs WHERE usage_date >= CURRENT_DATE - 7) AS usage_hours_7d,
-            (SELECT COUNT(*) FROM device_maintenance_logs WHERE start_datetime >= CURRENT_DATE - INTERVAL '30 days') AS equipment_logs_30d"
-    )->fetch();
-
-    $labBreakdown = $db->query(
-        "SELECT l.lab_code, l.lab_name, l.capacity,
-                COALESCE(d.device_count, 0) AS device_count,
-                COALESCE(d.available_devices, 0) AS available_devices,
-                COALESCE(u.usage_sessions_7d, 0) AS usage_sessions_7d,
-                COALESCE(u.participants_7d, 0) AS participants_7d,
-                u.last_used_at
-         FROM locations l
-         LEFT JOIN (
-             SELECT location_id,
-                    COUNT(*) AS device_count,
-                    SUM(CASE WHEN status = 'Available' THEN 1 ELSE 0 END) AS available_devices
-             FROM devices
-             GROUP BY location_id
-         ) d ON d.location_id = l.location_id
-         LEFT JOIN (
-             SELECT location_id,
-                    COUNT(*) AS usage_sessions_7d,
-                    COALESCE(SUM(participant_count), 0) AS participants_7d,
-                    MAX(session_start) AS last_used_at
+    $stats = [
+        'active_labs' => integrationSafeCount($db, 'locations', 'is_active = 1'),
+        'total_capacity' => integrationSafeSum($db, 'locations', 'capacity', 'is_active = 1'),
+        'total_devices' => integrationSafeCount($db, 'devices'),
+        'devices_available' => integrationSafeCount($db, 'devices', "status = 'Available'"),
+        'devices_under_repair' => integrationSafeCount($db, 'devices', "status = 'Under Repair'"),
+        'devices_damaged' => integrationSafeCount($db, 'devices', "status = 'Damaged'"),
+        'active_schedules' => integrationSafeCount($db, 'faculty_schedules', 'is_active = 1'),
+        'pending_requests' => integrationSafeCount($db, 'requests', "status = 'Pending'"),
+        'present_today' => integrationSafeCount($db, 'schedule_attendance', "attendance_date = CURRENT_DATE AND status = 'Present'"),
+        'absent_today' => integrationSafeCount($db, 'schedule_attendance', "attendance_date = CURRENT_DATE AND status = 'Absent'"),
+        'active_faculty' => integrationSafeCount($db, 'users', "role = 'Faculty' AND is_active = 1"),
+        'usage_sessions_today' => integrationSafeCount($db, 'lab_usage_logs', 'usage_date = CURRENT_DATE'),
+        'usage_sessions_7d' => integrationSafeCount($db, 'lab_usage_logs', 'usage_date >= CURRENT_DATE - 7'),
+        'participants_7d' => integrationSafeSum($db, 'lab_usage_logs', 'participant_count', 'usage_date >= CURRENT_DATE - 7'),
+        'equipment_logs_30d' => integrationSafeCount($db, 'device_maintenance_logs', "start_datetime >= CURRENT_DATE - INTERVAL '30 days'"),
+    ];
+    if (integrationTableExists($db, 'lab_usage_logs')) {
+        $stats['usage_hours_7d'] = (float) ($db->query(
+            "SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (COALESCE(session_end, session_start) - session_start))) / 3600.0, 0)
              FROM lab_usage_logs
-             WHERE usage_date >= CURRENT_DATE - 7
-             GROUP BY location_id
-         ) u ON u.location_id = l.location_id
-         WHERE l.is_active = 1
-         ORDER BY l.lab_code"
-    )->fetchAll();
+             WHERE usage_date >= CURRENT_DATE - 7"
+        )->fetchColumn() ?: 0);
+    } else {
+        $stats['usage_hours_7d'] = 0.0;
+    }
 
-    $recentRequests = $db->query(
-        "SELECT request_id, request_type, department, status, created_at
-         FROM requests
-         ORDER BY created_at DESC
-         LIMIT 5"
-    )->fetchAll();
+    $labBreakdown = [];
+    if (integrationTableExists($db, 'locations')) {
+        $labSql = "SELECT l.lab_code, l.lab_name, l.capacity,
+                          COALESCE(d.device_count, 0) AS device_count,
+                          COALESCE(d.available_devices, 0) AS available_devices";
+        if (integrationTableExists($db, 'lab_usage_logs')) {
+            $labSql .= ",
+                          COALESCE(u.usage_sessions_7d, 0) AS usage_sessions_7d,
+                          COALESCE(u.participants_7d, 0) AS participants_7d,
+                          u.last_used_at";
+        } else {
+            $labSql .= ",
+                          0 AS usage_sessions_7d,
+                          0 AS participants_7d,
+                          NULL::timestamptz AS last_used_at";
+        }
+        $labSql .= "
+                  FROM locations l
+                  LEFT JOIN (
+                      SELECT location_id,
+                             COUNT(*) AS device_count,
+                             SUM(CASE WHEN status = 'Available' THEN 1 ELSE 0 END) AS available_devices
+                      FROM devices
+                      GROUP BY location_id
+                  ) d ON d.location_id = l.location_id";
+        if (integrationTableExists($db, 'lab_usage_logs')) {
+            $labSql .= "
+                  LEFT JOIN (
+                      SELECT location_id,
+                             COUNT(*) AS usage_sessions_7d,
+                             COALESCE(SUM(participant_count), 0) AS participants_7d,
+                             MAX(session_start) AS last_used_at
+                      FROM lab_usage_logs
+                      WHERE usage_date >= CURRENT_DATE - 7
+                      GROUP BY location_id
+                  ) u ON u.location_id = l.location_id";
+        }
+        $labSql .= "
+                  WHERE l.is_active = 1
+                  ORDER BY l.lab_code";
+        $labBreakdown = $db->query($labSql)->fetchAll();
+    }
 
-    $recentUsageLogs = $db->query(
-        "SELECT ul.usage_log_id, ul.usage_date, ul.session_start, ul.session_end, ul.participant_count,
-                ul.subject_code, ul.source_system, ul.source_reference, ul.notes,
-                l.lab_code, l.lab_name,
-                CONCAT(COALESCE(u.first_name, ''), CASE WHEN u.last_name IS NOT NULL AND u.last_name <> '' THEN ' ' || u.last_name ELSE '' END) AS faculty_name
-         FROM lab_usage_logs ul
-         JOIN locations l ON l.location_id = ul.location_id
-         LEFT JOIN users u ON u.user_id = ul.faculty_id
-         ORDER BY ul.session_start DESC
-         LIMIT 5"
-    )->fetchAll();
+    $recentRequests = integrationTableExists($db, 'requests')
+        ? $db->query(
+            "SELECT request_id, request_type, department, status, created_at
+             FROM requests
+             ORDER BY created_at DESC
+             LIMIT 5"
+        )->fetchAll()
+        : [];
 
-    $recentEquipmentLogs = $db->query(
-        "SELECT ml.maintenance_id, ml.maintenance_type, ml.issue_description, ml.action_taken,
-                ml.status_before, ml.status_after, ml.start_datetime, ml.end_datetime,
-                d.device_code, d.device_type,
-                CONCAT(COALESCE(u.first_name, ''), CASE WHEN u.last_name IS NOT NULL AND u.last_name <> '' THEN ' ' || u.last_name ELSE '' END) AS performed_by_name
-         FROM device_maintenance_logs ml
-         JOIN devices d ON d.device_id = ml.device_id
-         LEFT JOIN users u ON u.user_id = ml.performed_by
-         ORDER BY ml.start_datetime DESC
-         LIMIT 5"
-    )->fetchAll();
+    $recentUsageLogs = integrationTableExists($db, 'lab_usage_logs')
+        ? $db->query(
+            "SELECT ul.usage_log_id, ul.usage_date, ul.session_start, ul.session_end, ul.participant_count,
+                    ul.subject_code, ul.source_system, ul.source_reference, ul.notes,
+                    l.lab_code, l.lab_name,
+                    CONCAT(COALESCE(u.first_name, ''), CASE WHEN u.last_name IS NOT NULL AND u.last_name <> '' THEN ' ' || u.last_name ELSE '' END) AS faculty_name
+             FROM lab_usage_logs ul
+             JOIN locations l ON l.location_id = ul.location_id
+             LEFT JOIN users u ON u.user_id = ul.faculty_id
+             ORDER BY ul.session_start DESC
+             LIMIT 5"
+        )->fetchAll()
+        : [];
+
+    $recentEquipmentLogs = integrationTableExists($db, 'device_maintenance_logs')
+        ? $db->query(
+            "SELECT ml.maintenance_id, ml.maintenance_type, ml.issue_description, ml.action_taken,
+                    ml.status_before, ml.status_after, ml.start_datetime, ml.end_datetime,
+                    d.device_code, d.device_type,
+                    CONCAT(COALESCE(u.first_name, ''), CASE WHEN u.last_name IS NOT NULL AND u.last_name <> '' THEN ' ' || u.last_name ELSE '' END) AS performed_by_name
+             FROM device_maintenance_logs ml
+             JOIN devices d ON d.device_id = ml.device_id
+             LEFT JOIN users u ON u.user_id = ml.performed_by
+             ORDER BY ml.start_datetime DESC
+             LIMIT 5"
+        )->fetchAll()
+        : [];
 
     return [
         'generated_at' => gmdate('c'),

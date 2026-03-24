@@ -464,6 +464,42 @@ select.form-control { cursor: pointer; }
 .modal-body   { padding: 1.1rem 1.35rem; }
 .modal-footer { padding: .9rem 1.35rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: .5rem; }
 
+/* HR staff request dialog — same field layout as PMED / HR integration */
+.hr-staff-req-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.hr-staff-req-grid-by {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 1rem;
+}
+.hr-staff-req-footer {
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+.btn-link-primary {
+  background: transparent;
+  border: none;
+  color: var(--blue);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0.5rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+.btn-link-primary:hover {
+  background: rgba(59, 125, 232, 0.12);
+}
+@media (max-width: 560px) {
+  .hr-staff-req-grid-2,
+  .hr-staff-req-grid-by {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Tab bar ────────────────────────────────────────────────── */
 .tab-bar { display: flex; border-bottom: 2px solid var(--border); margin-bottom: 1.1rem; }
 .tab-btn {

@@ -262,6 +262,83 @@ function integrationUpdateRecordStatus(PDO $db, array $input, array $access, str
     return integrationHydrateDocument($db, $documentId) ?? ['document_id' => $documentId];
 }
 
+function integrationGetWorkflowDocument(PDO $db, string $documentId): ?array {
+    $stmt = $db->prepare(
+        'SELECT d.document_id, d.status, d.payload,
+                sd.department_code AS sender_department_code,
+                rd.department_code AS receiver_department_code
+         FROM integration_documents d
+         JOIN departments sd ON sd.department_id = d.sender_department_id
+         JOIN departments rd ON rd.department_id = d.receiver_department_id
+         WHERE d.document_id = ?
+         LIMIT 1'
+    );
+    $stmt->execute([$documentId]);
+    $row = $stmt->fetch();
+    if (!$row) {
+        return null;
+    }
+
+    $row['payload'] = integrationDecodeJsonValue($row['payload']);
+    if (!is_array($row['payload'])) {
+        $row['payload'] = [];
+    }
+
+    return $row;
+}
+
+function integrationCanActAsPmed(array $access): bool {
+    $user = $access['user'] ?? null;
+    if (($access['via_token'] ?? false) === true) {
+        return true;
+    }
+    if (!is_array($user)) {
+        return false;
+    }
+
+    return (($user['department'] ?? '') === 'PMED') || (($user['role'] ?? '') === ROLE_ADMIN);
+}
+
+function integrationCanActAsComlab(array $access): bool {
+    $user = $access['user'] ?? null;
+    if (($access['via_token'] ?? false) === true) {
+        return true;
+    }
+    if (!is_array($user)) {
+        return false;
+    }
+
+    return ($user['role'] ?? '') === ROLE_ADMIN;
+}
+
+function integrationUpdateWorkflowStage(PDO $db, string $documentId, string $status, array $payload): array {
+    $now = gmdate('c');
+    $sentAt = in_array($status, ['sent', 'received', 'acknowledged', 'archived'], true) ? $now : null;
+    $receivedAt = in_array($status, ['received', 'acknowledged', 'archived'], true) ? $now : null;
+    $ackAt = in_array($status, ['acknowledged', 'archived'], true) ? $now : null;
+
+    $db->prepare(
+        'UPDATE integration_documents
+         SET status = ?,
+             payload = CAST(? AS jsonb),
+             sent_at = COALESCE(sent_at, ?),
+             received_at = CASE WHEN ? IS NOT NULL THEN COALESCE(received_at, ?) ELSE received_at END,
+             acknowledged_at = CASE WHEN ? IS NOT NULL THEN COALESCE(acknowledged_at, ?) ELSE acknowledged_at END
+         WHERE document_id = ?'
+    )->execute([
+        $status,
+        json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        $sentAt,
+        $receivedAt,
+        $receivedAt,
+        $ackAt,
+        $ackAt,
+        $documentId,
+    ]);
+
+    return integrationHydrateDocument($db, $documentId) ?? ['document_id' => $documentId];
+}
+
 $method = integrationMethod();
 
 try {
@@ -362,6 +439,108 @@ try {
             'message' => 'Integration record updated successfully.',
             'document' => $document,
         ]);
+    }
+
+    if ($action === 'pmed_verify_report') {
+        if (!integrationCanActAsPmed($access)) {
+            integrationJson(['success' => false, 'message' => 'PMED verification requires PMED department access or integration token.'], 403);
+        }
+
+        $documentId = trim((string) ($input['document_id'] ?? ''));
+        if ($documentId === '') {
+            integrationJson(['success' => false, 'message' => 'document_id is required.'], 422);
+        }
+
+        $existing = integrationGetWorkflowDocument($db, $documentId);
+        if ($existing === null) {
+            integrationJson(['success' => false, 'message' => 'Integration document not found.'], 404);
+        }
+        if (strtoupper((string) $existing['sender_department_code']) !== COMLAB_INTEGRATION_DEPARTMENT_CODE || strtoupper((string) $existing['receiver_department_code']) !== 'PMED') {
+            integrationJson(['success' => false, 'message' => 'Only COMLAB to PMED reports can be verified in this flow.'], 422);
+        }
+        if (!in_array((string) $existing['status'], ['sent', 'received'], true)) {
+            integrationJson(['success' => false, 'message' => 'Only sent/received reports can be PMED verified.'], 422);
+        }
+
+        $now = gmdate('c');
+        $payload = $existing['payload'];
+        $workflow = is_array($payload['workflow'] ?? null) ? $payload['workflow'] : [];
+        $workflow['stage'] = 'verified_by_pmed';
+        $workflow['pmed_verified_at'] = $now;
+        $workflow['pmed_verification_notes'] = trim((string) ($input['notes'] ?? ''));
+        $payload['workflow'] = array_filter($workflow, static fn($v) => $v !== '');
+
+        $document = integrationUpdateWorkflowStage($db, $documentId, 'acknowledged', $payload);
+        integrationAudit($db, $access['user']['user_id'] ?? null, 'PMED Report Verified', "PMED verified COMLAB report {$documentId}.", 'System', $documentId);
+        integrationJson(['success' => true, 'message' => 'Report verified by PMED.', 'document' => $document]);
+    }
+
+    if ($action === 'pmed_return_report') {
+        if (!integrationCanActAsPmed($access)) {
+            integrationJson(['success' => false, 'message' => 'PMED return requires PMED department access or integration token.'], 403);
+        }
+
+        $documentId = trim((string) ($input['document_id'] ?? ''));
+        if ($documentId === '') {
+            integrationJson(['success' => false, 'message' => 'document_id is required.'], 422);
+        }
+
+        $existing = integrationGetWorkflowDocument($db, $documentId);
+        if ($existing === null) {
+            integrationJson(['success' => false, 'message' => 'Integration document not found.'], 404);
+        }
+        if (strtoupper((string) $existing['sender_department_code']) !== COMLAB_INTEGRATION_DEPARTMENT_CODE || strtoupper((string) $existing['receiver_department_code']) !== 'PMED') {
+            integrationJson(['success' => false, 'message' => 'Only COMLAB to PMED reports can be returned in this flow.'], 422);
+        }
+        if (!in_array((string) $existing['status'], ['acknowledged', 'received'], true)) {
+            integrationJson(['success' => false, 'message' => 'Only PMED-verified reports can be returned to COMLAB.'], 422);
+        }
+
+        $now = gmdate('c');
+        $payload = $existing['payload'];
+        $workflow = is_array($payload['workflow'] ?? null) ? $payload['workflow'] : [];
+        $workflow['stage'] = 'returned_to_comlab';
+        $workflow['returned_to_comlab_at'] = $now;
+        $workflow['pmed_return_notes'] = trim((string) ($input['notes'] ?? ''));
+        $payload['workflow'] = array_filter($workflow, static fn($v) => $v !== '');
+
+        $document = integrationUpdateWorkflowStage($db, $documentId, 'received', $payload);
+        integrationAudit($db, $access['user']['user_id'] ?? null, 'PMED Report Returned', "PMED returned COMLAB report {$documentId} for confirmation.", 'System', $documentId);
+        integrationJson(['success' => true, 'message' => 'Report returned to COMLAB for confirmation.', 'document' => $document]);
+    }
+
+    if ($action === 'comlab_confirm_report') {
+        if (!integrationCanActAsComlab($access)) {
+            integrationJson(['success' => false, 'message' => 'COMLAB confirmation requires admin access or integration token.'], 403);
+        }
+
+        $documentId = trim((string) ($input['document_id'] ?? ''));
+        if ($documentId === '') {
+            integrationJson(['success' => false, 'message' => 'document_id is required.'], 422);
+        }
+
+        $existing = integrationGetWorkflowDocument($db, $documentId);
+        if ($existing === null) {
+            integrationJson(['success' => false, 'message' => 'Integration document not found.'], 404);
+        }
+        if (strtoupper((string) $existing['sender_department_code']) !== COMLAB_INTEGRATION_DEPARTMENT_CODE || strtoupper((string) $existing['receiver_department_code']) !== 'PMED') {
+            integrationJson(['success' => false, 'message' => 'Only COMLAB to PMED reports can be confirmed in this flow.'], 422);
+        }
+        $workflow = is_array(($existing['payload']['workflow'] ?? null)) ? $existing['payload']['workflow'] : [];
+        if (($workflow['stage'] ?? '') !== 'returned_to_comlab') {
+            integrationJson(['success' => false, 'message' => 'Report must be returned by PMED before COMLAB confirmation.'], 422);
+        }
+
+        $now = gmdate('c');
+        $payload = $existing['payload'];
+        $workflow['stage'] = 'confirmed_by_comlab';
+        $workflow['comlab_confirmed_at'] = $now;
+        $workflow['comlab_confirmation_notes'] = trim((string) ($input['notes'] ?? ''));
+        $payload['workflow'] = array_filter($workflow, static fn($v) => $v !== '');
+
+        $document = integrationUpdateWorkflowStage($db, $documentId, 'archived', $payload);
+        integrationAudit($db, $access['user']['user_id'] ?? null, 'COMLAB Report Confirmed', "COMLAB confirmed and closed report {$documentId}.", 'System', $documentId);
+        integrationJson(['success' => true, 'message' => 'Report confirmed by COMLAB and closed.', 'document' => $document]);
     }
 
     integrationJson(['success' => false, 'message' => 'Unsupported integration action.'], 422);

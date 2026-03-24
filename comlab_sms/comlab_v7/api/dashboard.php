@@ -54,7 +54,7 @@ try {
         )->fetch();
 
         $stmt2 = $db->query(
-            "SELECT r.request_id, r.request_type,
+            "SELECT r.request_id, r.request_type, r.pmed_status,
                     CONCAT(u.first_name, ' ', u.last_name) AS submitted_by_name,
                     r.issue_description, r.created_at
              FROM requests r

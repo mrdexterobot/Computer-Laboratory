@@ -13,9 +13,11 @@ function comlabLoadEnv(): void {
     }
     $loaded = true;
 
+    // Merge in order: first file wins per key. Optional HR/.env supplies VITE_SUPABASE_* for PostgREST (same monorepo).
     $envFiles = [
         dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . '.env',
         dirname(__DIR__) . DIRECTORY_SEPARATOR . '.env',
+        dirname(__DIR__, 4) . DIRECTORY_SEPARATOR . 'HR' . DIRECTORY_SEPARATOR . '.env',
     ];
 
     foreach ($envFiles as $envFile) {
@@ -40,6 +42,10 @@ function comlabLoadEnv(): void {
                 continue;
             }
 
+            if (getenv($key) !== false) {
+                continue;
+            }
+
             $value = trim($value);
             $length = strlen($value);
             if (
@@ -50,14 +56,10 @@ function comlabLoadEnv(): void {
                 $value = substr($value, 1, -1);
             }
 
-            if (getenv($key) === false) {
-                putenv($key . '=' . $value);
-            }
+            putenv($key . '=' . $value);
             $_ENV[$key] = $value;
             $_SERVER[$key] = $value;
         }
-
-        return;
     }
 }
 

@@ -33,7 +33,7 @@ export async function dispatchFacilityAccessReportToHR(
   const result = await dispatchDepartmentFlow(
     'comlab',
     'hr',
-    'facility_access_report',
+    'hr_staff_request',
     payload,
     sourceRecordId
   );

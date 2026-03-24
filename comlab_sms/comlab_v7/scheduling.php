@@ -36,9 +36,14 @@ $csrfToken = generateCsrfToken();
         </p>
       </div>
       <?php if ($isAdmin): ?>
-      <button class="btn btn-primary" onclick="syncHrSchedules()">
-        <i class="fas fa-arrows-rotate"></i> Sync from HR
-      </button>
+      <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+        <button class="btn btn-ghost" onclick="requestHrEmployee()">
+          <i class="fas fa-user-plus"></i> Request Employee from HR
+        </button>
+        <button class="btn btn-primary" onclick="syncHrSchedules()">
+          <i class="fas fa-arrows-rotate"></i> Sync from HR
+        </button>
+      </div>
       <?php endif; ?>
     </div>
 
@@ -116,6 +121,45 @@ $csrfToken = generateCsrfToken();
     <div class="modal-body" id="attModalBody">Loading...</div>
   </div>
 </div>
+
+<div class="modal-overlay" id="hrEmployeeReqModal">
+  <div class="modal hr-staff-req-modal" style="max-width:680px">
+    <div class="modal-header">
+      <h3 class="modal-title"><i class="fas fa-user-plus"></i> Request Additional Lab / IT Staff from HR</h3>
+      <button class="modal-close" onclick="closeModal('hrEmployeeReqModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="alert alert-danger" id="hrReqErr" style="display:none"></div>
+      <div class="hr-staff-req-grid-2">
+        <div class="form-group">
+          <label class="form-label" for="hrReqRole">Requested role</label>
+          <select class="form-control" id="hrReqRole" aria-label="Requested role for HR" required>
+            <option value="it_staff">IT Staff</option>
+            <option value="lab_technician">Lab Technician</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="hrReqQty">Requested count</label>
+          <input class="form-control" id="hrReqQty" type="number" min="1" value="1" required>
+        </div>
+      </div>
+      <div class="hr-staff-req-grid-by">
+        <div class="form-group">
+          <label class="form-label" for="hrReqBy">Requested by</label>
+          <input class="form-control" id="hrReqBy" type="text" value="COMLAB Admin" autocomplete="name">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="hrReqNotes">Request notes</label>
+          <textarea class="form-control" id="hrReqNotes" rows="3" placeholder="Request notes" required></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer hr-staff-req-footer">
+      <button type="button" class="btn btn-ghost" onclick="closeModal('hrEmployeeReqModal')">Cancel</button>
+      <button type="button" class="btn btn-link-primary" onclick="submitHrEmployeeRequest()">Send Request</button>
+    </div>
+  </div>
+</div>
 <?php endif; ?>
 
 <script src="<?= getBasePath() ?>assets/comlab-app.js"></script>
@@ -123,6 +167,8 @@ $csrfToken = generateCsrfToken();
 const IS_ADMIN = <?= $isAdmin ? 'true' : 'false' ?>;
 const API_BASE = '<?= getBasePath() ?>api/scheduling.php';
 const CSRF = '<?= htmlspecialchars($csrfToken) ?>';
+/** PostgREST pool key role_type (see comlab_resolve_hr_staff_role_type_from_requested_text) */
+const HR_COMLAB_DEFAULT_ROLE = 'it_staff';
 let allSchedules = [];
 
 async function loadSchedules() {
@@ -162,14 +208,18 @@ async function loadHrFeedStatus() {
     const res = await fetch(API_BASE + '?action=hr_status');
     const data = await res.json();
     const feed = data.hr_feed || null;
+    const req = data.last_employee_request || data.last_request || null;
+    const reqLabel = req
+      ? `Last employee request: ${esc(req.source_reference || req.document_id)} at ${esc(formatSimpleDate(req.sent_at || req.created_at))}.`
+      : 'No employee request sent yet.';
     if (!feed) {
-      banner.className = 'alert alert-warning';
-      banner.innerHTML = '<i class="fas fa-triangle-exclamation"></i>No HR schedule package is available yet. Send an HR schedule document, then sync it here.';
+      banner.className = 'alert alert-info';
+      banner.innerHTML = `<i class="fas fa-info-circle"></i> No HR schedule package found yet. ${reqLabel}`;
       return;
     }
     const total = Array.isArray(feed.payload?.schedules) ? feed.payload.schedules.length : 0;
     banner.className = 'alert alert-info';
-    banner.innerHTML = `<i class="fas fa-building-user"></i><strong>HR feed ready:</strong> ${total} schedule item(s) from ${esc(feed.document_id)}. Last package ${esc(formatSimpleDate(feed.sent_at || feed.created_at))}.`;
+    banner.innerHTML = `<i class="fas fa-building-user"></i><strong>HR feed ready:</strong> ${total} schedule item(s) from ${esc(feed.document_id)}. Last package ${esc(formatSimpleDate(feed.sent_at || feed.created_at))}. ${reqLabel}`;
   } catch (error) {
     banner.className = 'alert alert-danger';
     banner.innerHTML = '<i class="fas fa-circle-exclamation"></i>Unable to read the HR schedule feed status.';
@@ -234,6 +284,63 @@ async function syncHrSchedules() {
     await loadHrFeedStatus();
   } else {
     showToast(json.message || 'Unable to sync HR schedules.', 'danger');
+  }
+}
+
+async function requestHrEmployee() {
+  const err = document.getElementById('hrReqErr');
+  if (err) {
+    err.style.display = 'none';
+    err.textContent = '';
+  }
+  const notesInput = document.getElementById('hrReqNotes');
+  const roleInput = document.getElementById('hrReqRole');
+  const qtyInput = document.getElementById('hrReqQty');
+  const byInput = document.getElementById('hrReqBy');
+  if (notesInput) notesInput.value = '';
+  if (roleInput) roleInput.value = HR_COMLAB_DEFAULT_ROLE;
+  if (qtyInput) qtyInput.value = '1';
+  if (byInput && !byInput.value.trim()) byInput.value = 'COMLAB Admin';
+  openModal('hrEmployeeReqModal');
+}
+
+async function submitHrEmployeeRequest() {
+  const notes = (document.getElementById('hrReqNotes')?.value || '').trim();
+  const roleCode = (document.getElementById('hrReqRole')?.value || '').trim();
+  const quantity = Math.max(1, parseInt(document.getElementById('hrReqQty')?.value || '1', 10) || 1);
+  const requestedBy = (document.getElementById('hrReqBy')?.value || '').trim() || 'COMLAB Admin';
+
+  const err = document.getElementById('hrReqErr');
+  if (!notes) {
+    if (err) {
+      err.textContent = 'Request notes are required before requesting staff from HR.';
+      err.style.display = 'flex';
+    } else {
+      showToast('Request notes are required before requesting staff from HR.', 'warning');
+    }
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append('action', 'request_employee');
+  fd.append('request_notes', notes);
+  fd.append('requested_role', roleCode);
+  fd.append('quantity', String(quantity));
+  fd.append('requested_by', requestedBy);
+  fd.append('csrf_token', CSRF);
+  const res = await fetch(API_BASE, { method: 'POST', body: fd });
+  const json = await res.json();
+  if (json.success) {
+    showToast(json.message || 'Employee request sent to HR.', 'success');
+    closeModal('hrEmployeeReqModal');
+    await loadHrFeedStatus();
+  } else {
+    if (err) {
+      err.textContent = json.message || 'Unable to request employee from HR.';
+      err.style.display = 'flex';
+    } else {
+      showToast(json.message || 'Unable to request employee from HR.', 'danger');
+    }
   }
 }
 
@@ -315,8 +422,20 @@ function formatSimpleDate(value) {
   return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString();
 }
 
+function openHrRequestFromHash() {
+  if (!IS_ADMIN) return;
+  const h = (location.hash || '').replace(/^#/, '');
+  if (h === 'request-employee-hr' || h === 'request-hr-employee') {
+    requestHrEmployee();
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+}
+
+window.addEventListener('hashchange', openHrRequestFromHash);
+
 loadSchedules();
 loadHrFeedStatus();
+openHrRequestFromHash();
 </script>
 </body>
 </html>

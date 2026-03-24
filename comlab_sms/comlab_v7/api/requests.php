@@ -28,7 +28,7 @@ try {
         $statusOrder = sqlOrderCase('r.status', ['Pending', 'Approved', 'Completed', 'Rejected']);
 
         $requests = $db->prepare(
-            "SELECT r.request_id, r.request_type, r.department, r.status,
+            "SELECT r.request_id, r.request_type, r.department, r.status, r.pmed_status, r.crad_ref,
                     r.issue_description, r.date_needed,
                     r.location_text,
                     r.device_type_needed, r.specifications_needed, r.quantity, r.justification,

@@ -34,9 +34,14 @@ $H = fn($s) => htmlspecialchars((string)$s);
       <p class="page-subtitle" id="dateLabel">Loading…</p>
     </div>
     <?php if ($isAdmin): ?>
-    <a href="<?= $H($base) ?>scheduling.php" class="btn btn-navy">
-      <i class="fas fa-calendar-plus"></i> Assign Schedule
-    </a>
+    <div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:center">
+      <a href="<?= $H($base) ?>scheduling.php#request-employee-hr" class="btn btn-ghost">
+        <i class="fas fa-user-plus"></i> Request Employee from HR
+      </a>
+      <a href="<?= $H($base) ?>scheduling.php" class="btn btn-navy">
+        <i class="fas fa-calendar-plus"></i> Assign Schedule
+      </a>
+    </div>
     <?php endif; ?>
   </div>
 
@@ -168,12 +173,25 @@ async function load() {
             <div style="flex:1;min-width:0">
               <div style="font-size:.8rem;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.submitted_by_name)}</div>
               <div style="font-size:.73rem;color:var(--muted)">${esc(r.request_type)} · ${r.created_at?.slice(0,10)}</div>
+              ${r.pmed_status ? `<div style="font-size:.65rem;margin-top:2px"><span class="badge ${r.pmed_status==='Approved'?'badge-success':(r.pmed_status==='Verified'?'badge-primary':'badge-secondary')}" style="padding:1px 6px;font-size:.6rem">PMED: ${esc(r.pmed_status)}</span></div>` : ''}
             </div>
             <span class="badge badge-warning">${esc(r.request_type)}</span>
           </div>`).join('');
       }
     }
   } catch(e) { console.error(e); }
+}
+
+// Automatic HR Sync for Admins (once per session)
+if (ADMIN && !sessionStorage.getItem('hr_synced')) {
+  fetch(`${BASE}api/workflow.php?action=sync_employees`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.success) {
+        console.log('HR Sync:', d.message);
+        sessionStorage.setItem('hr_synced', 'true');
+      }
+    }).catch(e => console.error('HR Sync Error:', e));
 }
 
 load();

@@ -175,15 +175,37 @@ function integrationDispatchReport(PDO $db, array $input, array $access): array 
     $subjectRef = trim((string) ($input['subject_ref'] ?? ('RPT-' . gmdate('YmdHis'))));
     $sourceReference = trim((string) ($input['source_reference'] ?? ('comlab-report-' . gmdate('YmdHis'))));
     $now = gmdate('c');
-    $autoAcknowledge = $targetCode === 'PMED';
-    $initialStatus = $autoAcknowledge ? 'acknowledged' : 'received';
-    $acknowledgedAt = $autoAcknowledge ? $now : null;
+    $initialStatus = 'sent';
+    $acknowledgedAt = null;
 
+    $workflowInput = is_array($payloadPatch['workflow'] ?? null) ? $payloadPatch['workflow'] : [];
+    $reportCategory = strtolower(trim((string) ($workflowInput['report_category'] ?? 'operations_report')));
+    $allowedCategories = ['missing_computer', 'computer_sent', 'computer_received', 'operations_report'];
+    if (!in_array($reportCategory, $allowedCategories, true)) {
+        $reportCategory = 'operations_report';
+    }
+    $itemReference = trim((string) ($workflowInput['item_reference'] ?? ($payloadPatch['item_reference'] ?? '')));
+    $quantity = max(1, (int) ($workflowInput['quantity'] ?? ($payloadPatch['quantity'] ?? 1)));
+    $details = trim((string) ($workflowInput['details'] ?? ($payloadPatch['notes'] ?? '')));
+
+    $workflowBlock = [
+        'stage' => 'submitted_by_comlab',
+        'report_category' => $reportCategory,
+        'item_reference' => $itemReference !== '' ? $itemReference : null,
+        'quantity' => $quantity,
+        'details' => $details !== '' ? $details : null,
+        'submitted_by_department' => 'COMLAB',
+        'submitted_at' => $now,
+        'pmed_verified_at' => null,
+        'returned_to_comlab_at' => null,
+        'comlab_confirmed_at' => null,
+    ];
+
+    $package['workflow'] = array_filter($workflowBlock, static fn($value) => $value !== null);
     $package['handoff'] = [
         'mode' => 'shared_database',
         'receiver_department_code' => $targetCode,
-        'auto_received_at' => $now,
-        'auto_acknowledged_at' => $acknowledgedAt,
+        'submitted_at' => $now,
     ];
 
     $stmt = $db->prepare(
@@ -206,7 +228,7 @@ function integrationDispatchReport(PDO $db, array $input, array $access): array 
         $initialStatus,
         json_encode($package, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
         $now,
-        $now,
+        null,
         $acknowledgedAt,
         $access['user']['user_id'] ?? null,
     ]);

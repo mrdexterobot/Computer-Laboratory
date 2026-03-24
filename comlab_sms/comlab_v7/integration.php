@@ -335,6 +335,23 @@ $H = static fn($value) => htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8')
         <form id="dispatchReportForm">
           <div class="integration-form-grid">
             <div>
+              <label for="reportCategory">Report Type</label>
+              <select id="reportCategory" name="report_category">
+                <option value="operations_report">Operations report</option>
+                <option value="missing_computer">Missing computer</option>
+                <option value="computer_sent">Computer sent</option>
+                <option value="computer_received">Computer received</option>
+              </select>
+            </div>
+            <div>
+              <label for="reportItemRef">Item / Asset Reference</label>
+              <input id="reportItemRef" name="item_reference" placeholder="PC-104 / ASSET-2026-011">
+            </div>
+            <div>
+              <label for="reportQty">Quantity</label>
+              <input id="reportQty" name="quantity" type="number" min="1" value="1">
+            </div>
+            <div>
               <label for="reportCoverage">Coverage Period</label>
               <input id="reportCoverage" name="coverage_period" type="date">
             </div>
@@ -379,10 +396,11 @@ $H = static fn($value) => htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8')
                 <th>Record Type</th>
                 <th>Title</th>
                 <th>Status</th>
+                <th>Workflow</th>
               </tr>
             </thead>
             <tbody id="outboundBody">
-              <tr><td colspan="5"><div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Loading outbound records...</p></div></td></tr>
+              <tr><td colspan="6"><div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Loading outbound records...</p></div></td></tr>
             </tbody>
           </table>
         </div>
@@ -404,16 +422,102 @@ $H = static fn($value) => htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8')
                 <th>Record Type</th>
                 <th>Title</th>
                 <th>Status</th>
+                <th>Workflow</th>
               </tr>
             </thead>
             <tbody id="inboundBody">
-              <tr><td colspan="5"><div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Loading inbound records...</p></div></td></tr>
+              <tr><td colspan="6"><div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Loading inbound records...</p></div></td></tr>
             </tbody>
           </table>
         </div>
       </div>
     </section>
   </div>
+
+  <section class="card" style="margin-top:1rem">
+    <div class="card-header integration-table-title">
+      <h3 class="card-title"><i class="fas fa-clipboard-check"></i> PMED Verified Reports</h3>
+      <span class="integration-subtle" id="pmedVerifiedCountLabel">Loading...</span>
+    </div>
+    <div class="integration-card-body">
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Created</th>
+              <th>Title</th>
+              <th>Report Type</th>
+              <th>Workflow Stage</th>
+              <th>PMED Notes</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="pmedVerifiedBody">
+            <tr><td colspan="6"><div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Loading PMED verification records...</p></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ── HR Staff Request Section ──────────────────────────────────── -->
+<div style="margin-top:1.5rem">
+  <section class="card">
+    <div class="card-header">
+      <h3 class="card-title"><i class="fas fa-users-gear"></i> HR Staff Requests</h3>
+      <span class="badge badge-secondary" id="hrReqCountBadge">Loading…</span>
+    </div>
+    <div class="integration-card-body">
+      <p style="color:var(--muted);font-size:.85rem;margin:0 0 1rem">
+        Submit a hiring request directly to HR for additional Lab Technicians or IT Staff. HR will review and update the status below.
+      </p>
+
+      <?php if ($isAdmin): ?>
+      <form id="hrStaffReqForm" style="margin-bottom:1.25rem">
+        <div class="integration-form-grid">
+          <div>
+            <label for="hrRoleType">Role Type *</label>
+            <select id="hrRoleType" name="role_type" required>
+              <option value="">Select…</option>
+              <option value="lab_technician">Lab Technician</option>
+              <option value="it_staff">IT Staff</option>
+            </select>
+          </div>
+          <div>
+            <label for="hrReqCount">Requested Count</label>
+            <input type="number" id="hrReqCount" name="requested_count" min="1" value="1">
+          </div>
+          <div>
+            <label for="hrReqBy">Requested By</label>
+            <input type="text" id="hrReqBy" name="requested_by" value="ComLab Admin">
+          </div>
+        </div>
+        <div style="margin-top:.75rem">
+          <label for="hrReqNotes" style="display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:.35rem">Notes (optional)</label>
+          <textarea id="hrReqNotes" name="request_notes" rows="2" style="width:100%;border:1px solid var(--border);border-radius:14px;padding:.72rem .8rem;font:inherit" placeholder="Additional notes for HR…"></textarea>
+        </div>
+        <div id="hrReqError" class="alert alert-danger" style="display:none;margin-top:.75rem"></div>
+        <div style="display:flex;gap:.5rem;margin-top:.75rem">
+          <button type="submit" class="btn btn-navy" id="hrReqSubmitBtn"><i class="fas fa-paper-plane"></i> Send Request to HR</button>
+          <button type="button" class="btn btn-ghost" onclick="loadHrRequests()"><i class="fas fa-rotate"></i> Refresh</button>
+        </div>
+      </form>
+      <?php endif; ?>
+
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr><th>Reference</th><th>Role</th><th>Status</th><th>Requested By</th><th>Notes</th><th>Submitted</th></tr>
+          </thead>
+          <tbody id="hrReqBody">
+            <tr><td colspan="6"><div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Loading…</p></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="hrReqMeta" style="margin-top:.75rem;font-size:.8rem;color:var(--muted)"></div>
+    </div>
+  </section>
 </div>
 </main>
 
@@ -616,9 +720,47 @@ function renderRecords(targetId, rows, direction) {
   document.getElementById(labelId).textContent = `${rows.length} recent ${direction} item${rows.length === 1 ? '' : 's'}`;
 
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="5"><div class="empty-state"><i class="fas fa-box-open"></i><p>No ${esc(direction)} integration records found in the active scope.</p></div></td></tr>`;
+    body.innerHTML = `<tr><td colspan="6"><div class="empty-state"><i class="fas fa-box-open"></i><p>No ${esc(direction)} integration records found in the active scope.</p></div></td></tr>`;
     return;
   }
+
+  const workflowLabel = (record) => {
+    const stage = String(record?.payload?.workflow?.stage || '').toLowerCase();
+    if (stage === 'submitted_by_comlab') return 'Submitted by COMLAB';
+    if (stage === 'verified_by_pmed') return 'Verified by PMED';
+    if (stage === 'returned_to_comlab') return 'Returned to COMLAB';
+    if (stage === 'confirmed_by_comlab') return 'Confirmed by COMLAB';
+    return 'General integration flow';
+  };
+
+  const workflowActionButton = (record) => {
+    const peerCode = String(record.receiver_department?.code || '').toUpperCase();
+    if (direction !== 'outgoing' || peerCode !== 'PMED') {
+      return `<span class="integration-subtle">—</span>`;
+    }
+
+    const stage = String(record?.payload?.workflow?.stage || '').toLowerCase();
+    const status = String(record.status || '').toLowerCase();
+    const docId = String(record.document_id || '');
+    if (!docId) {
+      return `<span class="integration-subtle">—</span>`;
+    }
+
+    if (status === 'sent' || stage === 'submitted_by_comlab') {
+      return `<button class="btn btn-ghost btn-sm" onclick="runWorkflowAction('${esc(docId)}','pmed_verify_report','PMED verify this report?')">PMED Verify</button>`;
+    }
+    if (status === 'acknowledged' || stage === 'verified_by_pmed') {
+      return `<button class="btn btn-ghost btn-sm" onclick="runWorkflowAction('${esc(docId)}','pmed_return_report','Return this report to COMLAB?')">Return to COMLAB</button>`;
+    }
+    if (stage === 'returned_to_comlab' || status === 'received') {
+      return `<button class="btn btn-navy btn-sm" onclick="runWorkflowAction('${esc(docId)}','comlab_confirm_report','Confirm and close this report?')">COMLAB Confirm</button>`;
+    }
+    if (stage === 'confirmed_by_comlab' || status === 'archived') {
+      return `<span class="badge badge-success">Closed</span>`;
+    }
+
+    return `<span class="integration-subtle">—</span>`;
+  };
 
   body.innerHTML = rows.map((record) => {
     const peer = direction === 'outbound' ? record.receiver_department : record.sender_department;
@@ -628,8 +770,58 @@ function renderRecords(targetId, rows, direction) {
       <td><span class="code-tag">${esc(record.record_type?.name || record.record_type?.code || '-')}</span></td>
       <td>${esc(record.title || '-')}</td>
       <td><span class="badge ${badgeClass(record.status)}">${esc(record.status || 'pending')}</span></td>
+      <td>
+        <div style="display:grid;gap:.35rem">
+          <span class="integration-subtle">${esc(workflowLabel(record))}</span>
+          ${workflowActionButton(record)}
+        </div>
+      </td>
     </tr>`;
   }).join('');
+}
+
+function renderPmedVerifiedReports(rows) {
+  const body = document.getElementById('pmedVerifiedBody');
+  const label = document.getElementById('pmedVerifiedCountLabel');
+  const verified = rows.filter((record) => {
+    const stage = String(record?.payload?.workflow?.stage || '').toLowerCase();
+    return stage === 'verified_by_pmed' || String(record.status || '').toLowerCase() === 'acknowledged';
+  });
+  label.textContent = `${verified.length} verified by PMED`;
+
+  if (!verified.length) {
+    body.innerHTML = `<tr><td colspan="6"><div class="empty-state"><i class="fas fa-inbox"></i><p>No PMED verified COMLAB reports yet.</p></div></td></tr>`;
+    return;
+  }
+
+  body.innerHTML = verified.map((record) => {
+    const workflow = record?.payload?.workflow || {};
+    const stage = String(workflow.stage || '').toLowerCase() === 'verified_by_pmed' ? 'Verified by PMED' : 'PMED acknowledged';
+    const notes = workflow.pmed_verification_notes || '--';
+    return `<tr>
+      <td class="mono" style="font-size:.75rem">${esc(formatDateTime(record.created_at))}</td>
+      <td>${esc(record.title || '-')}</td>
+      <td><span class="code-tag">${esc(record.record_type?.name || record.record_type?.code || '-')}</span></td>
+      <td><span class="badge badge-primary">${esc(stage)}</span></td>
+      <td class="u-sub">${esc(notes)}</td>
+      <td><span class="badge ${badgeClass(record.status)}">${esc(record.status || 'pending')}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+async function runWorkflowAction(documentId, action, confirmText) {
+  if (!documentId) return;
+  if (!confirm(confirmText)) return;
+  try {
+    await postJson(API.records, {
+      action,
+      document_id: documentId
+    });
+    showNotification('Workflow stage updated successfully.', 'success');
+    await loadWorkspace();
+  } catch (error) {
+    showNotification(error instanceof Error ? error.message : 'Unable to update report workflow.', 'danger');
+  }
 }
 
 function populateDispatchOptions() {
@@ -659,42 +851,50 @@ function populateDispatchOptions() {
 }
 
 async function loadWorkspace() {
-  try {
-    const [mapResponse, outboundResponse, inboundResponse, reportResponse] = await Promise.all([
-      fetch(API.map),
-      fetch(`${API.records}?direction=outgoing&limit=12`),
-      fetch(`${API.records}?direction=incoming&limit=12`),
-      fetch(API.report)
-    ]);
+  const [mapResult, outboundResult, inboundResult, reportResult] = await Promise.allSettled([
+    fetch(API.map).then((response) => response.json()),
+    fetch(`${API.records}?direction=outgoing&limit=12`).then((response) => response.json()),
+    fetch(`${API.records}?direction=incoming&limit=12`).then((response) => response.json()),
+    fetch(API.report).then((response) => response.json())
+  ]);
 
-    const [mapPayload, outboundPayload, inboundPayload, reportPayload] = await Promise.all([
-      mapResponse.json(),
-      outboundResponse.json(),
-      inboundResponse.json(),
-      reportResponse.json()
-    ]);
+  const mapPayload = mapResult.status === 'fulfilled' ? mapResult.value : null;
+  if (!mapPayload?.success) {
+    const msg = mapPayload?.message || 'Unable to load integration map.';
+    showNotification(msg, 'danger');
+    return;
+  }
 
-    if (!mapPayload.success) throw new Error(mapPayload.message || 'Unable to load integration map.');
-    if (!outboundPayload.success) throw new Error(outboundPayload.message || 'Unable to load outbound records.');
-    if (!inboundPayload.success) throw new Error(inboundPayload.message || 'Unable to load inbound records.');
+  outboundRoutes = (mapPayload.outgoing || []).filter((route) => isRouteInActiveScope(route));
+  inboundRoutes = (mapPayload.incoming || []).filter((route) => isRouteInActiveScope(route));
 
-    outboundRoutes = (mapPayload.outgoing || []).filter((route) => isRouteInActiveScope(route));
-    inboundRoutes = (mapPayload.incoming || []).filter((route) => isRouteInActiveScope(route));
-    pmedReport = reportPayload.success ? reportPayload : null;
+  const outboundPayload = outboundResult.status === 'fulfilled' ? outboundResult.value : null;
+  const inboundPayload = inboundResult.status === 'fulfilled' ? inboundResult.value : null;
+  const reportPayload = reportResult.status === 'fulfilled' ? reportResult.value : null;
 
-    const outboundRecords = (outboundPayload.records || []).filter((record) => isRecordInActiveScope(record));
-    const inboundRecords = (inboundPayload.records || []).filter((record) => isRecordInActiveScope(record));
+  const outboundRecords = outboundPayload?.success
+    ? (outboundPayload.records || []).filter((record) => isRecordInActiveScope(record))
+    : [];
+  const inboundRecords = inboundPayload?.success
+    ? (inboundPayload.records || []).filter((record) => isRecordInActiveScope(record))
+    : [];
 
-    renderStats({ incoming: inboundRoutes, outgoing: outboundRoutes, summary: mapPayload.summary || {} }, outboundRecords, inboundRecords);
-    renderConnections({ incoming: inboundRoutes, outgoing: outboundRoutes, summary: mapPayload.summary || {} });
-    renderSummary({ incoming: inboundRoutes, outgoing: outboundRoutes, summary: mapPayload.summary || {} }, outboundRecords, inboundRecords);
-    renderReportSummary(pmedReport);
-    renderRecords('outboundBody', outboundRecords, 'outbound');
-    renderRecords('inboundBody', inboundRecords, 'inbound');
-    populateDispatchOptions();
-  } catch (error) {
-    console.error(error);
-    showNotification(error instanceof Error ? error.message : 'Unable to load the COMLAB integration workspace.', 'danger');
+  pmedReport = reportPayload?.success ? reportPayload : null;
+
+  renderStats({ incoming: inboundRoutes, outgoing: outboundRoutes, summary: mapPayload.summary || {} }, outboundRecords, inboundRecords);
+  renderConnections({ incoming: inboundRoutes, outgoing: outboundRoutes, summary: mapPayload.summary || {} });
+  renderSummary({ incoming: inboundRoutes, outgoing: outboundRoutes, summary: mapPayload.summary || {} }, outboundRecords, inboundRecords);
+  renderReportSummary(pmedReport);
+  renderRecords('outboundBody', outboundRecords, 'outbound');
+  renderRecords('inboundBody', inboundRecords, 'inbound');
+  renderPmedVerifiedReports(outboundRecords);
+  populateDispatchOptions();
+
+  if (!outboundPayload?.success || !inboundPayload?.success) {
+    showNotification('Integration records loaded with limited data. Check integration permissions or records endpoint.', 'warning');
+  }
+  if (!reportPayload?.success) {
+    showNotification(reportPayload?.message || 'PMED report snapshot is unavailable right now.', 'warning');
   }
 }
 
@@ -716,6 +916,100 @@ async function postJson(url, payload) {
   return data;
 }
 
+// ── HR Staff Requests ──────────────────────────────────────────────────────
+const HR_API = BASE + 'api/integrations/departments/hr_staff_requests.php';
+
+async function loadHrRequests(page = 1) {
+  const tbody  = document.getElementById('hrReqBody');
+  const meta   = document.getElementById('hrReqMeta');
+  const badge  = document.getElementById('hrReqCountBadge');
+  if (!tbody) return;
+
+  tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Loading…</p></div></td></tr>';
+  try {
+    const res  = await fetch(`${HR_API}?page=${page}&per_page=10`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'Failed to load.');
+
+    const items = data.items || [];
+    const m     = data.meta  || {};
+
+    if (badge) badge.textContent = m.total ?? items.length;
+
+    if (!items.length) {
+      tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i class="fas fa-inbox"></i><p>No staff requests yet.</p></div></td></tr>';
+      if (meta) meta.textContent = '';
+      return;
+    }
+
+    const statusColor = (s) => {
+      if (s === 'approved' || s === 'hired')   return 'badge-success';
+      if (s === 'rejected')                     return 'badge-danger';
+      if (s === 'hiring')                       return 'badge-info';
+      if (s === 'waiting_applicant')            return 'badge-secondary';
+      return 'badge-warning';
+    };
+
+    const roleLabel = (r) => (r || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const fmtDate   = (d) => d ? new Date(d).toLocaleString() : '--';
+
+    tbody.innerHTML = items.map(r => `
+      <tr>
+        <td><strong>${r.request_reference || '--'}</strong></td>
+        <td>${roleLabel(r.role_type)}</td>
+        <td><span class="badge ${statusColor(r.request_status)}">${r.request_status || 'pending'}</span></td>
+        <td>${r.requested_by || '--'}</td>
+        <td style="max-width:200px;white-space:normal;font-size:.78rem">${r.request_notes || '--'}</td>
+        <td style="font-size:.78rem;color:var(--muted)">${fmtDate(r.created_at)}</td>
+      </tr>
+    `).join('');
+
+    if (meta) meta.textContent = `Showing ${items.length} of ${m.total || items.length} requests`;
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><i class="fas fa-triangle-exclamation"></i><p>${err.message}</p></div></td></tr>`;
+  }
+}
+
+const hrStaffReqForm = document.getElementById('hrStaffReqForm');
+if (hrStaffReqForm) {
+  hrStaffReqForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errDiv = document.getElementById('hrReqError');
+    const btn    = document.getElementById('hrReqSubmitBtn');
+    if (errDiv) { errDiv.style.display = 'none'; errDiv.textContent = ''; }
+
+    const payload = {
+      role_type:       document.getElementById('hrRoleType').value,
+      requested_count: parseInt(document.getElementById('hrReqCount').value, 10) || 1,
+      requested_by:    document.getElementById('hrReqBy').value.trim() || 'ComLab Admin',
+      request_notes:   document.getElementById('hrReqNotes').value.trim(),
+    };
+
+    if (!payload.role_type) {
+      if (errDiv) { errDiv.style.display = ''; errDiv.textContent = 'Please select a role type.'; }
+      return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending…';
+    try {
+      const data = await postJson(HR_API, payload);
+      showNotification(`Staff request submitted (${data.request_reference}).`, 'success');
+      hrStaffReqForm.reset();
+      document.getElementById('hrReqBy').value = 'ComLab Admin';
+      await loadHrRequests();
+    } catch (err) {
+      if (errDiv) { errDiv.style.display = ''; errDiv.textContent = err.message; }
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-paper-plane"></i> Send Request to HR';
+    }
+  });
+}
+
+loadHrRequests();
+
+// ── Dispatch Record Form ─────────────────────────────────────────────────────
 const dispatchRecordForm = document.getElementById('dispatchRecordForm');
 if (dispatchRecordForm) {
   dispatchRecordForm.addEventListener('submit', async (event) => {
@@ -758,6 +1052,9 @@ if (dispatchReportForm) {
   dispatchReportForm.addEventListener('submit', async (event) => {
     event.preventDefault();
 
+    const reportCategory = document.getElementById('reportCategory').value || 'operations_report';
+    const itemReference = document.getElementById('reportItemRef').value.trim();
+    const quantity = Math.max(1, Number.parseInt(document.getElementById('reportQty').value || '1', 10) || 1);
     const coveragePeriod = document.getElementById('reportCoverage').value;
     const requestedBy = document.getElementById('reportRequestedBy').value.trim() || 'COMLAB Integration Hub';
     const title = document.getElementById('reportTitle').value.trim() || 'COMLAB daily usage report';
@@ -773,7 +1070,13 @@ if (dispatchReportForm) {
         payload: {
           coverage_period: coveragePeriod || null,
           requested_by: requestedBy,
-          notes
+          notes,
+          workflow: {
+            report_category: reportCategory,
+            item_reference: itemReference || null,
+            quantity,
+            details: notes || null
+          }
         }
       });
 

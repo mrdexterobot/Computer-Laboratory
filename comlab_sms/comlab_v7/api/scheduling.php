@@ -3,6 +3,7 @@
 // Supabase/Postgres ready
 
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../includes/supabase_hr_staff_request.php';
 require_once __DIR__ . '/../config/auth.php';
 require_once __DIR__ . '/../includes/require_auth.php';
 
@@ -201,9 +202,13 @@ try {
 
         if ($action === 'hr_status') {
             $status = latestHrScheduleDocument($db);
+            $lastRequest = latestHrScheduleSyncRequest($db);
+            $lastEmployeeRequest = latestHrEmployeeRequest($db);
             echo json_encode([
                 'success' => true,
                 'hr_feed' => $status,
+                'last_request' => $lastRequest,
+                'last_employee_request' => $lastEmployeeRequest,
             ]);
             exit;
         }
@@ -358,26 +363,87 @@ try {
                 exit;
             }
 
+            // Attempt to find integration document first
             $document = latestHrScheduleDocument($db);
-            if ($document === null) {
-                echo json_encode(['success' => false, 'message' => 'No HR schedule feed was found for COMLAB.']);
-                exit;
+            
+            $schedules = [];
+            if ($document) {
+                $payload = $document['payload'];
+                if (is_array($payload) && isset($payload['schedules']) && is_array($payload['schedules'])) {
+                    $schedules = $payload['schedules'];
+                }
             }
 
-            $payload = $document['payload'];
-            $schedules = [];
-            if (is_array($payload) && isset($payload['schedules']) && is_array($payload['schedules'])) {
-                $schedules = $payload['schedules'];
+            // If no integration document, fallback to direct Registrar schema query
+            if ($schedules === []) {
+                $registrarSchema = comlabEnv('REGISTRAR_DB_SCHEMA', 'registrar');
+                try {
+                    $stmt = $db->prepare("
+                        SELECT 
+                            i.employee_no as hr_employee_id,
+                            i.first_name,
+                            i.last_name,
+                            c.title as class_name,
+                            s.day as day_of_week,
+                            s.time as time_range,
+                            s.room as lab_code,
+                            i.department
+                        FROM $registrarSchema.instructor_class_assignments ica
+                        JOIN $registrarSchema.instructors i ON ica.instructor_employee_no = i.employee_no
+                        JOIN $registrarSchema.classes c ON ica.class_id = c.id
+                        JOIN $registrarSchema.schedules s ON s.class_id = c.id
+                        WHERE s.room LIKE 'Lab%' OR s.room LIKE 'Computer Lab%'
+                    ");
+                    $stmt->execute();
+                    $rawSchedules = $stmt->fetchAll();
+
+                    foreach ($rawSchedules as $rs) {
+                        // Parse "08:00 AM - 10:00 AM"
+                        $parts = explode(' - ', $rs['time_range']);
+                        if (count($parts) !== 2) continue;
+                        
+                        $start = date('H:i:s', strtotime($parts[0]));
+                        $end = date('H:i:s', strtotime($parts[1]));
+
+                        // Map Registrar rooms to COMLAB lab codes
+                        $roomMap = [
+                            'Lab 1' => 'LAB-A',
+                            'Lab 2' => 'LAB-B',
+                            'Lab 3' => 'LAB-C',
+                            'Computer Lab A' => 'LAB-A',
+                            'Computer Lab B' => 'LAB-B',
+                            'Computer Lab C' => 'LAB-C'
+                        ];
+                        $labCode = $roomMap[$rs['lab_code']] ?? $rs['lab_code'];
+
+                        $schedules[] = [
+                            'hr_employee_id' => $rs['hr_employee_id'],
+                            'class_name' => $rs['class_name'],
+                            'day_of_week' => $rs['day_of_week'],
+                            'start_time' => $start,
+                            'end_time' => $end,
+                            'lab_code' => $labCode,
+                            'department' => $rs['department'],
+                            'semester_start' => date('Y-01-01'), // Default to current year
+                            'semester_end' => date('Y-06-30'),
+                            'source_reference' => 'REGISTRAR-DIRECT'
+                        ];
+                    }
+                } catch (Exception $e) {
+                    error_log('[COMLAB Scheduling Sync] Registrar fallback failed: ' . $e->getMessage());
+                }
             }
 
             if ($schedules === []) {
-                echo json_encode(['success' => false, 'message' => 'The latest HR schedule feed does not contain any schedules.']);
+                echo json_encode(['success' => false, 'message' => 'No HR schedule feed or Registrar data was found for COMLAB.']);
                 exit;
             }
 
             $created = 0;
             $updated = 0;
             $skipped = [];
+            $documentSourceRef = is_array($document) ? trim((string) ($document['source_reference'] ?? '')) : '';
+            // ... (rest of the sync logic remains same)
 
             foreach ($schedules as $index => $item) {
                 if (!is_array($item)) {
@@ -395,7 +461,8 @@ try {
                 $semesterEnd = trim((string) ($item['semester_end'] ?? ''));
                 $department = trim((string) ($item['department'] ?? ''));
                 $notes = trim((string) ($item['notes'] ?? ''));
-                $sourceReference = trim((string) ($item['source_reference'] ?? ($document['source_reference'] . ':' . ($index + 1))));
+                $fallbackReference = $documentSourceRef !== '' ? ($documentSourceRef . ':' . ($index + 1)) : ('HR-SCHEDULE:' . ($index + 1));
+                $sourceReference = trim((string) ($item['source_reference'] ?? $fallbackReference));
 
                 if (!$facultyId || !$locationId || $className === '' || $days === '' || $start === '' || $end === '' || $semesterStart === '' || $semesterEnd === '' || $department === '') {
                     $skipped[] = 'Row ' . ($index + 1) . ' is missing a faculty match, lab match, or a required schedule field.';
@@ -501,6 +568,235 @@ try {
                 'updated' => $updated,
                 'skipped' => $skipped,
                 'document' => $document,
+            ]);
+            exit;
+        }
+
+        if ($action === 'request_hr_sync') {
+            if ($role !== ROLE_ADMIN) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Admin only.']);
+                exit;
+            }
+            $reason = trim((string) ($_POST['reason'] ?? ''));
+            if ($reason === '') {
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Reason is required when requesting HR sync.',
+                ]);
+                exit;
+            }
+
+            $route = resolveHrSyncRequestRoute($db);
+            if (!$route) {
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'No active COMLAB to HR integration route for faculty schedule sync requests. Configure integration_routes first.',
+                ]);
+                exit;
+            }
+
+            $requestRef = 'COMLAB-HR-SYNC-' . gmdate('YmdHis');
+            $payload = [
+                'workflow_action' => 'request_hr_schedule_sync',
+                'requested_by' => [
+                    'user_id' => $uid,
+                    'role' => $role,
+                    'department' => 'COMLAB',
+                ],
+                'requested_at' => gmdate('c'),
+                'request_ref' => $requestRef,
+                'requested_record_type' => HR_SCHEDULE_RECORD_TYPE,
+                'reason' => $reason,
+                'notes' => 'COMLAB requested an updated faculty schedule package from HR.',
+            ];
+
+            $stmt = $db->prepare(
+                'INSERT INTO integration_documents
+                 (route_id, record_type_id, sender_department_id, receiver_department_id,
+                  subject_type, subject_ref, title, source_system, source_reference, status,
+                  payload, sent_at, created_by_user_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?)
+                 RETURNING document_id'
+            );
+            $stmt->execute([
+                $route['route_id'],
+                $route['record_type_id'],
+                $route['sender_department_id'],
+                $route['receiver_department_id'],
+                'system',
+                $requestRef,
+                'COMLAB Request: HR Faculty Schedule Sync',
+                'COMLAB',
+                $requestRef,
+                'sent',
+                json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                gmdate('c'),
+                $uid,
+            ]);
+            $documentId = (string) $stmt->fetchColumn();
+
+            auditLog(
+                $db,
+                $uid,
+                'HR Schedule Sync Requested',
+                'System',
+                null,
+                "COMLAB requested HR schedule sync. Document {$documentId}, reference {$requestRef}. Reason: {$reason}",
+                $ip,
+                $ua
+            );
+
+            echo json_encode([
+                'success' => true,
+                'message' => 'HR sync request sent. HR can now dispatch an updated schedule package.',
+                'document_id' => $documentId,
+                'request_reference' => $requestRef,
+            ]);
+            exit;
+        }
+
+        if ($action === 'request_employee') {
+            if ($role !== ROLE_ADMIN) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Admin only.']);
+                exit;
+            }
+
+            $reason = trim((string) ($_POST['request_notes'] ?? $_POST['reason'] ?? ''));
+            $requestedRole = trim((string) ($_POST['requested_role'] ?? ''));
+            $quantity = max(1, (int) ($_POST['quantity'] ?? 1));
+            $requestedByLabel = trim((string) ($_POST['requested_by'] ?? ''));
+            if ($requestedByLabel === '') {
+                $requestedByLabel = 'COMLAB Admin';
+            }
+            if ($reason === '') {
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Request notes are required when requesting employee support from HR.',
+                ]);
+                exit;
+            }
+
+            $route = resolveHrEmployeeRequestRoute($db);
+            if (!$route) {
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Unable to resolve COMLAB/HR integration metadata for employee request. Check departments and integration record types.',
+                ]);
+                exit;
+            }
+
+            $requestRef = 'COMLAB-EMP-REQ-' . gmdate('YmdHis');
+            $payload = [
+                'workflow_action' => 'request_employee_support',
+                'requested_by' => [
+                    'user_id' => $uid,
+                    'role' => $role,
+                    'department' => 'COMLAB',
+                    'display_name' => $requestedByLabel,
+                ],
+                'requested_at' => gmdate('c'),
+                'request_ref' => $requestRef,
+                'reason' => $reason,
+                'requested_role' => $requestedRole,
+                'quantity' => $quantity,
+                'notes' => 'COMLAB requested employee support due to manpower needs.',
+                'requested_by_label' => $requestedByLabel,
+            ];
+
+            /** @var string|false $documentId */
+            $documentId = false;
+            try {
+                $db->beginTransaction();
+
+                $stmt = $db->prepare(
+                    'INSERT INTO integration_documents
+                     (route_id, record_type_id, sender_department_id, receiver_department_id,
+                      subject_type, subject_ref, title, source_system, source_reference, status,
+                      payload, sent_at, created_by_user_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?)
+                     RETURNING document_id'
+                );
+                $stmt->execute([
+                    $route['route_id'] ?: null,
+                    $route['record_type_id'],
+                    $route['sender_department_id'],
+                    $route['receiver_department_id'],
+                    'staff',
+                    $requestRef,
+                    'COMLAB Request: Employee Support from HR',
+                    'COMLAB',
+                    $requestRef,
+                    'sent',
+                    json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                    gmdate('c'),
+                    $uid,
+                ]);
+                $documentId = $stmt->fetchColumn();
+                if ($documentId === false) {
+                    throw new RuntimeException('integration_documents insert did not return document_id.');
+                }
+                $documentId = (string) $documentId;
+
+                $db->commit();
+            } catch (Throwable $e) {
+                if ($db->inTransaction()) {
+                    $db->rollBack();
+                }
+                error_log('[COMLAB Scheduling API] request_employee integration_documents failed: ' . $e->getMessage());
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Could not save the COMLAB integration record for this request.',
+                ]);
+                exit;
+            }
+
+            // Same path as PMED createHrStaffRequest: Supabase PostgREST + anon key → public.hr_staff_* (HR Job Postings).
+            $hrStaffRef = null;
+            try {
+                $reasonForHr = $reason;
+                if ($requestedByLabel !== '') {
+                    $reasonForHr .= ' | Requested by: ' . $requestedByLabel;
+                }
+
+                $hrPush = comlab_push_hr_staff_request_via_supabase_rest_like_pmed(
+                    $quantity,
+                    $reasonForHr,
+                    $requestedRole,
+                    $requestRef,
+                    $documentId,
+                    $uid
+                );
+                $hrStaffRef = $hrPush['request_reference'] ?? null;
+            } catch (Throwable $e) {
+                error_log('[COMLAB Scheduling API] request_employee Supabase HR sync failed: ' . $e->getMessage());
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'COMLAB saved the request locally, but HR did not receive it. ' . $e->getMessage(),
+                    'document_id' => $documentId,
+                    'request_reference' => $requestRef,
+                ]);
+                exit;
+            }
+
+            auditLog(
+                $db,
+                $uid,
+                'HR Employee Requested',
+                'System',
+                null,
+                "COMLAB requested employee support from HR. Document {$documentId}, reference {$requestRef}, qty {$quantity}. Reason: {$reason}",
+                $ip,
+                $ua
+            );
+
+            echo json_encode([
+                'success' => true,
+                'message' => 'Employee request sent to HR successfully.',
+                'document_id' => $documentId,
+                'request_reference' => $requestRef,
+                'hr_staff_request_reference' => $hrStaffRef,
             ]);
             exit;
         }
@@ -635,7 +931,10 @@ function latestHrScheduleDocument(PDO $db): ?array {
          JOIN departments rd ON rd.department_id = d.receiver_department_id
          WHERE sd.department_code = 'HR'
            AND rd.department_code = 'COMLAB'
-           AND rt.record_type_code = ?
+           AND (
+                rt.record_type_code = ?
+                OR CAST(d.payload AS text) ILIKE '%\"schedules\"%'
+           )
          ORDER BY COALESCE(d.sent_at, d.created_at) DESC
          LIMIT 1"
     );
@@ -655,6 +954,157 @@ function latestHrScheduleDocument(PDO $db): ?array {
         'created_at' => $row['created_at'],
         'payload' => is_array($payload) ? $payload : [],
     ];
+}
+
+function latestHrScheduleSyncRequest(PDO $db): ?array {
+    $stmt = $db->prepare(
+        "SELECT d.document_id, d.source_reference, d.sent_at, d.created_at, d.payload
+         FROM integration_documents d
+         JOIN departments sd ON sd.department_id = d.sender_department_id
+         JOIN departments rd ON rd.department_id = d.receiver_department_id
+         WHERE sd.department_code = 'COMLAB'
+           AND rd.department_code = 'HR'
+           AND CAST(d.payload AS text) ILIKE '%request_hr_schedule_sync%'
+         ORDER BY COALESCE(d.sent_at, d.created_at) DESC
+         LIMIT 1"
+    );
+    $stmt->execute();
+    $row = $stmt->fetch();
+    if (!$row) {
+        return null;
+    }
+
+    $payload = json_decode((string) $row['payload'], true);
+    return [
+        'document_id' => (string) $row['document_id'],
+        'source_reference' => (string) ($row['source_reference'] ?? ''),
+        'sent_at' => $row['sent_at'],
+        'created_at' => $row['created_at'],
+        'payload' => is_array($payload) ? $payload : [],
+    ];
+}
+
+function latestHrEmployeeRequest(PDO $db): ?array {
+    $stmt = $db->prepare(
+        "SELECT d.document_id, d.source_reference, d.sent_at, d.created_at, d.payload
+         FROM integration_documents d
+         JOIN departments sd ON sd.department_id = d.sender_department_id
+         JOIN departments rd ON rd.department_id = d.receiver_department_id
+         WHERE sd.department_code = 'COMLAB'
+           AND rd.department_code = 'HR'
+           AND CAST(d.payload AS text) ILIKE '%request_employee_support%'
+         ORDER BY COALESCE(d.sent_at, d.created_at) DESC
+         LIMIT 1"
+    );
+    $stmt->execute();
+    $row = $stmt->fetch();
+    if (!$row) {
+        return null;
+    }
+
+    $payload = json_decode((string) $row['payload'], true);
+    return [
+        'document_id' => (string) $row['document_id'],
+        'source_reference' => (string) ($row['source_reference'] ?? ''),
+        'sent_at' => $row['sent_at'],
+        'created_at' => $row['created_at'],
+        'payload' => is_array($payload) ? $payload : [],
+    ];
+}
+
+function resolveHrSyncRequestRoute(PDO $db): ?array {
+    $stmt = $db->prepare(
+        "SELECT rt.route_id, rt.record_type_id, rt.sender_department_id, rt.receiver_department_id
+         FROM integration_routes rt
+         JOIN departments sd ON sd.department_id = rt.sender_department_id
+         JOIN departments rd ON rd.department_id = rt.receiver_department_id
+         JOIN integration_record_types irt ON irt.record_type_id = rt.record_type_id
+         WHERE sd.department_code = 'COMLAB'
+           AND rd.department_code = 'HR'
+           AND rt.is_active = 1
+           AND (
+                irt.record_type_code = ?
+                OR irt.record_type_code = 'staff_list'
+                OR irt.record_type_code = 'user_accounts'
+           )
+         ORDER BY CASE WHEN irt.record_type_code = ? THEN 0 ELSE 1 END, rt.flow_order
+         LIMIT 1"
+    );
+    $stmt->execute([HR_SCHEDULE_RECORD_TYPE, HR_SCHEDULE_RECORD_TYPE]);
+    $row = $stmt->fetch();
+    return $row ?: null;
+}
+
+function resolveHrEmployeeRequestRoute(PDO $db): ?array {
+    $stmt = $db->prepare(
+        "SELECT rt.route_id, rt.record_type_id, rt.sender_department_id, rt.receiver_department_id
+         FROM integration_routes rt
+         JOIN departments sd ON sd.department_id = rt.sender_department_id
+         JOIN departments rd ON rd.department_id = rt.receiver_department_id
+         JOIN integration_record_types irt ON irt.record_type_id = rt.record_type_id
+         WHERE sd.department_code = 'COMLAB'
+           AND rd.department_code = 'HR'
+           AND rt.is_active = 1
+           AND (
+                irt.record_type_code = 'staff_list'
+                OR irt.record_type_code = 'user_accounts'
+                OR irt.record_type_code = ?
+           )
+         ORDER BY rt.flow_order
+         LIMIT 1"
+    );
+    $stmt->execute([HR_SCHEDULE_RECORD_TYPE]);
+    $row = $stmt->fetch();
+    if ($row) {
+        return $row;
+    }
+
+    // Fallback: allow employee request even if a direct active route is not configured.
+    $senderDepartmentId = resolveDepartmentIdByCode($db, 'COMLAB');
+    $receiverDepartmentId = resolveDepartmentIdByCode($db, 'HR');
+    $recordTypeId = resolveHrEmployeeRequestRecordTypeId($db);
+    if (!$senderDepartmentId || !$receiverDepartmentId || !$recordTypeId) {
+        return null;
+    }
+
+    return [
+        'route_id' => null,
+        'record_type_id' => $recordTypeId,
+        'sender_department_id' => $senderDepartmentId,
+        'receiver_department_id' => $receiverDepartmentId,
+    ];
+}
+
+function resolveDepartmentIdByCode(PDO $db, string $code): ?int {
+    $stmt = $db->prepare('SELECT department_id FROM departments WHERE department_code = ? LIMIT 1');
+    $stmt->execute([$code]);
+    $id = $stmt->fetchColumn();
+    return $id ? (int) $id : null;
+}
+
+function resolveHrEmployeeRequestRecordTypeId(PDO $db): ?int {
+    $stmt = $db->prepare(
+        "SELECT record_type_id
+         FROM integration_record_types
+         WHERE is_active = 1
+           AND record_type_code IN ('staff_list', 'user_accounts', ?)
+         ORDER BY CASE
+                    WHEN record_type_code = 'staff_list' THEN 0
+                    WHEN record_type_code = 'user_accounts' THEN 1
+                    ELSE 2
+                  END
+         LIMIT 1"
+    );
+    $stmt->execute([HR_SCHEDULE_RECORD_TYPE]);
+    $id = $stmt->fetchColumn();
+    if ($id) {
+        return (int) $id;
+    }
+
+    // Last fallback to any active record type so request can still be logged and tracked.
+    $stmt = $db->query("SELECT record_type_id FROM integration_record_types WHERE is_active = 1 ORDER BY record_type_id LIMIT 1");
+    $id = $stmt ? $stmt->fetchColumn() : false;
+    return $id ? (int) $id : null;
 }
 
 function resolveFacultyIdFromHrPayload(PDO $db, array $item): ?int {
